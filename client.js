@@ -1185,7 +1185,7 @@ window.__ModuleLoader__.load({
 
     const HOURS = Array.from({ length: 24 }, (_, index) => index);
     const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
-    const WHEEL_ITEM = 34;
+    const WHEEL_ITEM = 40;
 
     function pad2(value) { return String(value).padStart(2, '0'); }
 
@@ -1194,126 +1194,114 @@ window.__ModuleLoader__.load({
     const HOUR_ITEMS = HOURS.map((hour) => ({ value: pad2(hour), label: pad2(hour) }));
     const MINUTE_ITEMS = MINUTES.map((minute) => ({ value: pad2(minute), label: pad2(minute) }));
 
-    function Wheel({ items, value, onChange, ariaLabel, snapTo }) {
-      const nodeRef = React.useRef(null);
-      const settle = React.useRef(0);
-      const touched = React.useRef(0);
-      const programmatic = React.useRef(0);
+    /* Reference: the native iOS/Android time picker. Three rows, no boxes, no
+       borders, the middle row bold and the rows above/below fading out into the
+       edges. We drive it with a transform instead of a scroll container: on
+       Android WebView a scrollable child inside the modal gets its pan stolen,
+       and a transform also renders the same way on every engine. */
+    function Wheel({ items, value, onChange, ariaLabel }) {
+      const [dragging, setDragging] = React.useState(false);
+      const [dy, setDy] = React.useState(0);
       const drag = React.useRef(null);
       const skipClick = React.useRef(0);
-      const [active, setActive] = React.useState(() => Math.max(0, items.findIndex((item) => item.value === value)));
-
-      /* Native scrolling inside a modal body is unreliable on Android WebView: the
-         modal steals the pan and the wheel barely moves. So the wheel drives itself
-         with pointer events and keeps its own scrollTop - one finger, one row. */
-      function indexAt() {
-        const node = nodeRef.current;
-        if (!node) return active;
-        return Math.max(0, Math.min(items.length - 1, Math.round(node.scrollTop / WHEEL_ITEM)));
-      }
+      const touched = React.useRef(0);
+      const found = items.findIndex((item) => item.value === value);
+      const current = found >= 0 ? found : 0;
 
       function commit(index) {
-        const item = items[index];
-        setActive(index);
+        const next = Math.max(0, Math.min(items.length - 1, index));
+        const item = items[next];
+        touched.current = Date.now();
         if (item && item.value !== value) onChange(item.value);
       }
 
       function onPointerDown(event) {
-        const node = nodeRef.current;
-        if (!node) return;
-        drag.current = { y: event.clientY, top: node.scrollTop, id: event.pointerId, moved: false };
-        touched.current = Date.now();
-        try { node.setPointerCapture(event.pointerId); } catch (error) { /* older engines */ }
+        if (drag.current) return;
+        drag.current = { y: event.clientY, base: current, id: event.pointerId, moved: false };
+        try { event.currentTarget.setPointerCapture(event.pointerId); } catch (error) { /* older engines */ }
       }
 
       function onPointerMove(event) {
-        const node = nodeRef.current;
         const state = drag.current;
-        if (!node || !state || event.pointerId !== state.id) return;
-        const delta = state.y - event.clientY;
-        if (Math.abs(delta) > 2) state.moved = true;
-        node.scrollTop = state.top + delta;
-        setActive(indexAt());
-        touched.current = Date.now();
+        if (!state || event.pointerId !== state.id) return;
+        const delta = event.clientY - state.y;
+        if (Math.abs(delta) > 3) {
+          state.moved = true;
+          setDragging(true);
+        }
+        setDy(delta);
       }
 
       function onPointerUp(event) {
-        const node = nodeRef.current;
         const state = drag.current;
+        if (!state || event.pointerId !== state.id) return;
         drag.current = null;
-        if (!node || !state) return;
+        setDragging(false);
+        setDy(0);
         if (!state.moved) return;
-        const index = indexAt();
-        node.scrollTop = index * WHEEL_ITEM;
-        touched.current = Date.now();
-        programmatic.current = Date.now();
         skipClick.current = Date.now();
-        commit(index);
-      }
-
-      React.useEffect(() => {
-        const index = Math.max(0, items.findIndex((item) => item.value === value));
-        setActive(index);
-        const node = nodeRef.current;
-        if (node && Date.now() - touched.current > 400 && index >= 0) node.scrollTop = index * WHEEL_ITEM;
-      }, [value, items]);
-
-      React.useEffect(() => () => window.clearTimeout(settle.current), []);
-
-      function handleScroll() {
-        const node = nodeRef.current;
-        if (!node) return;
-        /* A tap-scroll is still animating: its scroll events are not the person's
-           intent, so ignore them instead of writing a half-way value. */
-        if (Date.now() - programmatic.current < 420) return;
-        touched.current = Date.now();
-        const index = Math.max(0, Math.min(items.length - 1, Math.round(node.scrollTop / WHEEL_ITEM)));
-        setActive(index);
-        window.clearTimeout(settle.current);
-        settle.current = window.setTimeout(() => {
-          const item = items[index];
-          if (item && item.value !== value) onChange(item.value);
-        }, 130);
+        commit(state.base - Math.round((event.clientY - state.y) / WHEEL_ITEM));
       }
 
       function jump(index) {
-        if (Date.now() - skipClick.current < 400) return;
-        const item = items[index];
-        touched.current = Date.now();
-        programmatic.current = Date.now();
-        setActive(index);
-        const node = nodeRef.current;
-        /* Jump instantly instead of smooth-scrolling: a smooth scroll emits a burst
-           of scroll events and the last one can land on a neighbouring row. */
-        if (node) node.scrollTop = index * WHEEL_ITEM;
-        if (item && item.value !== value) onChange(item.value);
+        if (Date.now() - skipClick.current < 350) return;
+        commit(index);
       }
 
-      return h('div', { className: 'todo-wheel' },
-        h('span', { className: 'todo-wheel-band', 'aria-hidden': true }),
-        h('div', {
-          className: 'todo-wheel-scroll',
-          ref: nodeRef,
-          onScroll: handleScroll,
-          onPointerDown: onPointerDown,
-          onPointerMove: onPointerMove,
-          onPointerUp: onPointerUp,
-          onPointerCancel: onPointerUp,
-          role: 'listbox',
-          tabIndex: 0,
-          'aria-label': ariaLabel,
-          'aria-activedescendant': undefined,
+      const offset = (1 - current) * WHEEL_ITEM + dy;
+
+      const fade = 'linear-gradient(180deg, transparent 0, rgba(0,0,0,.12) 16%, #000 42%, #000 58%, rgba(0,0,0,.12) 84%, transparent 100%)';
+      return h('div', {
+        className: 'todo-wheel',
+        style: {
+          position: 'relative',
+          height: WHEEL_ITEM * 3,
+          overflow: 'hidden',
+          touchAction: 'none',
+          WebkitMaskImage: fade,
+          maskImage: fade,
         },
-          h('span', { className: 'todo-wheel-pad', 'aria-hidden': true }),
+        role: 'listbox',
+        'aria-label': ariaLabel,
+        tabIndex: 0,
+        onPointerDown: onPointerDown,
+        onPointerMove: onPointerMove,
+        onPointerUp: onPointerUp,
+        onPointerCancel: onPointerUp,
+        onKeyDown: (event) => {
+          if (event.key === 'ArrowDown') { event.preventDefault(); jump(current + 1); }
+          else if (event.key === 'ArrowUp') { event.preventDefault(); jump(current - 1); }
+        },
+      },
+        h('span', {
+          className: 'todo-wheel-band',
+          'aria-hidden': true,
+          style: { position: 'absolute', left: 0, right: 0, top: WHEEL_ITEM, height: WHEEL_ITEM, borderRadius: 10 },
+        }),
+        h('div', {
+          className: `todo-wheel-track${dragging ? ' is-dragging' : ''}`,
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            transform: `translate3d(0, ${offset}px, 0)`,
+          },
+        },
           items.map((item, index) => h('button', {
             key: item.value || `none-${index}`,
             type: 'button',
             role: 'option',
-            'aria-selected': index === active,
-            className: `todo-wheel-item${index === active ? ' is-active' : ''}`,
+            tabIndex: -1,
+            'aria-selected': index === current,
+            className: `todo-wheel-item${index === current ? ' is-active' : ''}`,
+            style: {
+              display: 'block',
+              flex: `0 0 ${WHEEL_ITEM}px`,
+              width: '100%',
+              height: `${WHEEL_ITEM}px`,
+              lineHeight: `${WHEEL_ITEM}px`,
+            },
             onClick: () => jump(index),
-          }, item.label)),
-          h('span', { className: 'todo-wheel-pad', 'aria-hidden': true })));
+          }, item.label))));
     }
 
     function DateTimePicker({ value, end, repeat, locale, copy, onChange }) {
@@ -2195,16 +2183,18 @@ window.__ModuleLoader__.load({
       .todo-mode-switch{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}
       .todo-mode-switch button{height:24px;padding:0 9px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:10.5px;font-weight:650;white-space:nowrap;cursor:pointer;transition:background .16s ease,color .16s ease}
       .todo-mode-switch button.is-active{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary,#5068ee));color:#fff}
-      .todo-wheel-line{display:flex;align-items:center;gap:5px;animation:todo-fade-in .2s ease both}
-      .todo-wheel-label{flex:0 0 28px;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-weight:650}
-      .todo-wheel{position:relative;flex:1 1 0;min-width:0;height:102px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}
-      .todo-wheel-scroll{height:100%;overflow-y:auto;overflow-x:hidden;padding:34px 0;scrollbar-width:none;overscroll-behavior:contain;touch-action:none}
-      .todo-wheel-scroll::-webkit-scrollbar{display:none}
-      .todo-wheel-pad{display:block;height:34px}
-      .todo-wheel-item{display:block;width:100%;height:34px;line-height:34px;text-align:center;border:0;border-radius:9px;background:transparent;font-size:13px;font-family:inherit;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;transition:color .12s ease}
-      .todo-wheel-item.is-active{color:var(--dsw-alias-label-primary);font-weight:700;transform:scale(1.06)}
-      .todo-wheel-band{position:absolute;left:5px;right:5px;top:34px;height:34px;border-radius:9px;background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 10%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 22%,transparent);pointer-events:none}
-      .todo-wheel-colon{flex:0 0 auto;color:var(--dsw-alias-label-secondary);font-weight:700;font-size:13px}
+      .todo-wheel-line{display:flex;align-items:center;gap:8px;animation:todo-fade-in .2s ease both}
+      .todo-wheel-label{flex:0 0 26px;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-weight:650}
+      .todo-wheel{position:relative;flex:1 1 0;min-width:0;height:120px;overflow:hidden;border-radius:12px;-webkit-mask-image:linear-gradient(180deg,transparent 0,rgba(0,0,0,.18) 14%,#000 40%,#000 60%,rgba(0,0,0,.18) 86%,transparent 100%);mask-image:linear-gradient(180deg,transparent 0,rgba(0,0,0,.18) 14%,#000 40%,#000 60%,rgba(0,0,0,.18) 86%,transparent 100%);cursor:grab;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;touch-action:none}
+      .todo-wheel:active{cursor:grabbing}
+      .todo-wheel-band{position:absolute;left:0;right:0;top:40px;height:40px;pointer-events:none;background:transparent;border-top:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 13%,transparent);border-bottom:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 13%,transparent);border-radius:0}
+      .todo-wheel-track{position:absolute;left:0;right:0;top:0;display:flex;flex-direction:column;transition:transform .19s cubic-bezier(.22,.61,.36,1);will-change:transform}
+      .todo-wheel-track.is-dragging{transition:none}
+      .todo-wheel-item{flex:0 0 40px;display:block;width:100%;height:40px;line-height:40px;padding:0;border:0;background:transparent;font-family:inherit;font-size:16px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);opacity:.26;cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;transition:opacity .16s ease,font-size .16s ease,font-weight .16s ease}
+      .todo-wheel-item.is-active{opacity:1;font-size:21px;font-weight:650;letter-spacing:.01em}
+      .todo-wheel-item:hover{opacity:.62}
+      .todo-wheel-item.is-active:hover{opacity:1}
+      .todo-wheel-colon{flex:0 0 auto;color:var(--dsw-alias-label-secondary);font-weight:700;font-size:15px}
       .todo-wheel-clear{flex:0 0 auto;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font:inherit;font-size:15px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background .15s ease,color .15s ease}
       .todo-wheel-clear:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
       .todo-repeat-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
