@@ -1,0 +1,196 @@
+# DSH Smart Notes · 智能便签
+
+一个运行在 DeepSeek Harness（DSH）Web UI 里的**智能待办便签插件**：说一句话就能建好一张便签，时间、地点、重复周期自动识别。
+
+> 本仓库基于 [Cherry020303/DSH-TodoList](https://github.com/Cherry020303/DSH-TodoList)（MIT）大幅重构：重写智能解析器、把时间选择器改成「日历 + 滚轮」、新增开始–结束时间段与重复周期、重做动效与响应式 UI。
+
+当前版本：`1.0.0`
+
+---
+
+## 主要功能
+
+### 一句话智能创建
+
+在输入框里直接说（或语音说）一句自然语言，插件会解析成一张便签：
+
+| 输入 | 识别结果 |
+| --- | --- |
+| `明天下午三点 和小刘老师开会 在办公室` | 标题「和小刘老师开会」· 地点「办公室」· 明天 15:00 |
+| `明天下午三点到五点 教研 在会议室 每周` | 标题「教研」· 地点「会议室」· 明天 15:00–17:00 · 每周重复 |
+| `下周一 09:30 体检 在医院` | 下周一 09:30 · 地点「医院」 |
+| `3月5日 交材料` | 次年 3 月 5 日（已过则顺延）· 全天 |
+| `明天 交周报、开会 在3楼、买牛奶` | 识别到 3 件事，可展开预览后一次全部创建 |
+| `那个会议不用了` | 判定为取消语义，不建便签 |
+
+支持的语义：
+
+- **日期**：今天 / 明天 / 后天 / 大后天、周一～周日（本周 / 下周 / 下下周）、周末、N 天后、3月5日、3/5、5号、下个月五号、这个月二十号、中文数字（十一月二十号）
+- **时刻**：15:30、三点、三点半、三点一刻、3pm、at 3 o'clock、上午九点 / 中午 / 下午 / 傍晚 / 晚上（自动 AM/PM 校正，已过则顺延）
+- **时间段**：三点到五点、下午三点半到五点、15:00–17:30（结束早于开始自动跨午或后推）
+- **重复**：每天 / 工作日 / 每周 / 每月、every monday、每天早上七点半（写入 `repeat` 字段）
+- **地点**：`在办公室` / `在三楼会议室` / `地点在学校`；也支持不带「在」——用手写地点或历史便签里的常用地点（`knownPlaces`）作词库
+- **口语清洗**：嗯 / 啊 / 哦 / 呃 / 吧（保留酒吧、网吧）/ 那个 / 然后 / 就是 / 大概 / 左右 / 「你帮我记一下」等语气词与指令尾全部剥掉
+- **动作词永不当地点**：`明天 改试卷` 不会被解析成地点「改试卷」
+
+### 时间选择：先日历选日，再滚轮选时刻
+
+- 快捷芯片：今天 / 明天 / 后天 / 周末 / 下周一
+- 月历：周一起始、过去日期灰化、今天描边、点选高亮
+- **滚轮挑时刻**：时（00–23）+ 分（5 分钟步进），手指拖动 + 松手吸附 + 点选跳转
+- **三种模式**：全天 / 开始时刻 / 开始–结束（结束时间早于开始会自动后推一小时）
+- **重复周期**：不重复 / 每天 / 工作日 / 每周 / 每月；解析出的重复也会落成可删除的芯片
+
+### 便签墙
+
+- 12 种粉彩纸张色 + 纸张渐变、图钉、轻微倾斜
+- 按日期分组（今天 / 明天 / 11月13日 周五 …），未安排单独一组
+- 状态圆点一键完成，完成态删除线 + 弹跳打勾
+- 搜索（标题 / 地点）、时间范围筛选（今天 / 未来 7 天 / 本周 / 本月 / 已逾期 / 自定义）、状态筛选（全部 / 待完成 / 已完成）
+- 侧栏待完成徽标（最高显示 99）、顶部进度徽标
+- 一键删除需二次确认
+- 响应式：宽屏三列 / 中屏两列 / 窄屏单列；手机上弹窗改用底部抽屉并适配安全区
+- `prefers-reduced-motion` 下所有动画关闭
+
+### 动效
+
+便签逐张 38ms 错峰入场、完成弹跳、图钉微光、FAB 呼吸环、chip 依次浮现、吐司上滑；滚轮采用指针拖拽而非原生滚动（见下方「实现说明」）。
+
+---
+
+## 运行环境
+
+本项目是 DSH / Cordis bundle，不是独立 Web 应用。运行时需要：
+
+- 已安装并可正常运行的 DeepSeek Harness
+- DSH Web UI 及其客户端模块加载器
+- DSH 提供的 React、`slots` 和 `locale` 运行时能力
+- 支持 `localStorage` 与指针事件的现代浏览器 / Android WebView
+
+项目不包含独立服务器、构建脚本或第三方 npm 依赖，不能通过 `node index.js` 单独启动。
+
+## 安装
+
+### 1. 获取源码
+
+```sh
+git clone https://github.com/1SanTi/dsh-smart-notes.git
+cd dsh-smart-notes
+```
+
+### 2. 安装到 DSH
+
+在 DSH 中把本仓库的**绝对目录**作为本地 bundle 安装，并启用包 `dsh-smart-notes`。也可以把目录放进 profile 的 `node_modules` 后用 `link:` 依赖指向它：
+
+```json
+"dependencies": { "dsh-smart-notes": "link:/绝对路径/dsh-smart-notes" }
+```
+
+安装后在 DSH Web UI 刷新页面，左侧栏会出现 `智能便签`（英文界面为 `Smart Notes`）入口。
+
+> DSH 的插件管理入口随版本与配置不同。本仓库没有通用安装命令，也不建议手工复制文件到 profile 目录后不登记依赖。
+
+## 使用
+
+1. 打开 DSH Web UI，点左侧栏 `智能便签`
+2. 点右下角 `+` 打新增待办
+3. 在「一句话就能建」里直接说完整意图；识别出的时间 / 地点 / 重复会显示为芯片
+4. 需要精确调整时点「选择日期与时间」：先点日历选日，再拨滚轮选时刻；可开关「开始–结束」与「重复」
+5. 点「贴上便签」保存；若识别到多件事，按钮会变成「全部创建」
+6. 点卡片左侧圆点切换完成状态，点卡片本体打开编辑，删除需二次确认
+
+按 `Esc` 可关闭弹窗与浮层；卡片聚焦后可用 `Enter` / 空格打开编辑。
+
+## 数据存储
+
+便签保存在当前浏览器环境的 `localStorage`：
+
+```text
+dsh.my-todos.v1
+```
+
+插件仍会读取旧版便签墙数据键并自动迁移：
+
+```text
+dsh.sticky-notes-wall.v1
+```
+
+单条数据结构：
+
+```js
+{
+  id, title, location,
+  due,      // 'YYYY-MM-DD'（全天）或 'YYYY-MM-DDTHH:MM'
+  end,      // 'HH:MM'，可为空
+  repeat,   // '' | 'daily' | 'weekday' | 'weekly' | 'weekly:1' | 'monthly' | 'monthly:5'
+  status,   // 'pending' | 'done'
+  color, createdAt, updatedAt
+}
+```
+
+注意：
+
+- 数据属于当前页面所对应的浏览器存储，不会自动同步到 GitHub
+- 换浏览器、换站点地址或清除站点数据后，原便签可能不可见
+- 本版本没有云同步 / 导入导出 / 服务端备份
+- 重新安装或更新插件时不要清除上述存储键
+
+## 开发者笔记
+
+### 目录结构
+
+```text
+dsh-smart-notes/
+├─ client.js          # 客户端：解析器 + 组件 + 样式（单文件 bundle）
+├─ cordis.patch.yml   # 把 dsh-smart-notes 插入 Cordis 组合
+├─ icon.svg           # bundle 图标
+├─ index.js           # Host 入口（空实现，UI 全在客户端）
+├─ LICENSE            # MIT
+├─ README.md
+├─ locale/
+│  ├─ en.json         # 英文元数据
+│  └─ zh.json         # 中文元数据
+└─ package.json       # 包清单、导出项与 DSH 客户端声明
+```
+
+### 校验命令
+
+```sh
+node --check client.js
+node -e "const fs=require('fs');for(const f of ['package.json','locale/zh.json','locale/en.json'])JSON.parse(fs.readFileSync(f,'utf8'));console.log('JSON OK')"
+```
+
+### 智能解析器
+
+解析器是 `client.js` 里 `/* smart parsing */` 到 `/* icons */` 之间的纯函数段，主入口：
+
+```js
+parseSmart(rawText, now, knownPlaces) // → { title, location, due, end, repeat, hasDate, hasTime }
+splitTasks(rawText)                   // → string[]（一句话拆多件）
+planSmart(rawText, now, knownPlaces)  // → parseSmart 结果数组（含多任务继承日期/时刻）
+```
+
+规则顺序：语音清洗 → 取消语义 → 话语标记/指代清洗 → 语气词 → 模糊时间词 → 相对日 / 星期 / 周末 / N 天后 / 显式日期 / 下个月N号 → 时刻与时间段 → 时段词兜底 → 重复规则 → 地点抽取（三档置信度）→ 标题清洗 → 多任务摘要与继承。
+
+改动解析器后建议跑语料回归（本仓库开发期的三套语料：规矩句 111 条、真实口语 53 条、泛化探测 20 条，全部通过后再部署）。
+
+### 滚轮为什么不用原生滚动
+
+Android WebView 中，嵌在 `overflow:auto` 弹窗里的原生滚动容器经常收不到手势（被外层 modal 抢走）。因此滚轮用 `pointerdown/move/up` 自行计算 `scrollTop`，松手后吸附到整格；CSS 上配 `touch-action:none`，并**不使用** `scroll-snap-type`（会导致拖拽起点漂移、回弹）。高度固定 3 行（102px），再高会被弹窗裁切。
+
+### 与上游的关系
+
+- 上游：`@local/todolist`（`todo-list` 面板 id）
+- 本仓库：`dsh-smart-notes`（`smart-notes` 面板 id）
+
+两者**面板 id 不同**，因此理论上可并存；但都注册到 `sidebar.panellist`，建议同时只启用一个，避免侧栏出现两个入口。
+
+## 许可证
+
+[MIT](./LICENSE)，沿用上游版权声明。
+
+## 注意事项
+
+- `package.json` 的 `private: true` 表示未发布到 npm；GitHub 仓库不等于插件市场发布
+- 修改包名、Cordis 插件 id（`cordis.patch.yml` 里的 `smart-notes`）、面板 id（`client.js` 里的 `PANEL_ID`）时，三处必须同步，否则侧栏会注册不上
+- 不要更改 `localStorage` 键名，否则现有数据读不出来

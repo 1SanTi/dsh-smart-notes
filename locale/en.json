@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Smart Notes",
+    "description": "Create a todo from one sentence: time, place and repeat are parsed automatically. Calendar + wheel time picker, start/end ranges, daily/weekday/weekly/monthly repeats, and a sidebar pending count."
+  }
+}
