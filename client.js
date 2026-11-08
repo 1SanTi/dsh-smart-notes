@@ -50,7 +50,7 @@ window.__ModuleLoader__.load({
         emptyTitle: '还没有便签', emptyBody: '点右下角 +，一句话就能贴上第一张。',
         noResultsTitle: '没有匹配的便签', noResultsBody: '换个关键词、状态或时间范围试试。',
         addTitle: '新增待办', editTitle: '编辑待办',
-        smartLabel: '一句话就能建', smartPlaceholder: '例如：明天下午三点 和小刘老师开会 在办公室',
+        smartLabel: '一句话就能建', smartPlaceholder: '例如：明天下午三点 和同事开会 在办公室',
         smartHint: '自动识别时间与地点，也能用「、」一次说几件事', smartVoice: '语音',
         recognized: '已识别', undetected: '没识别到时间', noPlace: '没写地点',
         chipTime: '时间', chipPlace: '地点', clearField: '清除',
