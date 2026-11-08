@@ -42,6 +42,13 @@ window.__ModuleLoader__.load({
         customRange: 'Custom range', startDate: 'Start', endDate: 'End', applyRange: 'Apply', clearRange: 'Clear',
         invalidRange: 'Start must not be after end.', fromDate: 'From {date}', throughDate: 'Through {date}',
         sound: 'sound',
+        archive: 'Archive', archiveTitle: 'Archive', archiveSubtitle: 'Everything you have finished, kept for later.',
+        archiveEmpty: 'Nothing archived yet', archiveEmptyBody: 'Finished notes show up here the next day, and stay searchable.',
+        archiveCount: '{count} archived', archiveRestore: 'Restore', archiveDelete: 'Remove for good',
+        archiveAll: 'All', archiveToday: 'Today', archiveWeek: 'Last 7 days', archiveMonth: 'Last 30 days',
+        archiveClear: 'Clear archive', archiveClearConfirm: 'Tap again to clear', archiveCleared: 'Archive cleared',
+        completedAt: 'Done {date}', restored: 'Back in your notes', archiveRemoved: 'Removed from archive',
+        soundLabel: 'Sound', soundOn: 'On', soundOff: 'Off',
       },
       zh: {
         nav: '智能便签', title: '智能便签', subtitle: '说一句话就建好，时间、地点、重复自动填。',
@@ -50,7 +57,7 @@ window.__ModuleLoader__.load({
         emptyTitle: '还没有便签', emptyBody: '点右下角 +，一句话就能贴上第一张。',
         noResultsTitle: '没有匹配的便签', noResultsBody: '换个关键词、状态或时间范围试试。',
         addTitle: '新增待办', editTitle: '编辑待办',
-        smartLabel: '一句话就能建', smartPlaceholder: '例如：明天下午三点 和同事开会 在办公室',
+        smartLabel: '一句话就能建', smartPlaceholder: '例如：明天下午三点 和小刘老师开会 在办公室',
         smartHint: '自动识别时间与地点，也能用「、」一次说几件事', smartVoice: '语音',
         recognized: '已识别', undetected: '没识别到时间', noPlace: '没写地点',
         chipTime: '时间', chipPlace: '地点', clearField: '清除',
@@ -73,6 +80,13 @@ window.__ModuleLoader__.load({
         customRange: '自定义范围', startDate: '开始', endDate: '结束', applyRange: '应用', clearRange: '清除',
         invalidRange: '开始日期不能晚于结束日期。', fromDate: '从 {date}', throughDate: '截至 {date}',
         sound: '声',
+        archive: '档案', archiveTitle: '便签档案', archiveSubtitle: '做完的都留在这里，随时能翻。',
+        archiveEmpty: '档案还是空的', archiveEmptyBody: '完成的便签会在第二天进到这里，一直都能搜到。',
+        archiveCount: '已归档 {count} 条', archiveRestore: '恢复', archiveDelete: '彻底删除',
+        archiveAll: '全部', archiveToday: '今天', archiveWeek: '近 7 天', archiveMonth: '近 30 天',
+        archiveClear: '清空档案', archiveClearConfirm: '再点一次清空', archiveCleared: '档案已清空',
+        completedAt: '{date} 完成', restored: '已恢复到便签墙', archiveRemoved: '已从档案删除',
+        soundLabel: '音效', soundOn: '开', soundOff: '关',
       },
     };
 
@@ -159,6 +173,7 @@ window.__ModuleLoader__.load({
         end: normalizeEnd(item.end),
         repeat: normalizeRepeat(item.repeat),
         status: item.status === 'completed' ? 'completed' : 'pending',
+        completedAt: Number(item.completedAt) || (item.status === 'completed' ? (Number(item.updatedAt) || now) : 0),
         color: normalizeColor(item.color, id),
         createdAt: Number(item.createdAt) || now,
         updatedAt: Number(item.updatedAt) || now,
@@ -277,6 +292,25 @@ window.__ModuleLoader__.load({
       return info.time;
     }
 
+    function formatClock(ts) {
+      const date = new Date(Number(ts) || 0);
+      if (!ts) return '';
+      const pad = (value) => (value < 10 ? '0' + value : String(value));
+      return pad(date.getHours()) + ':' + pad(date.getMinutes());
+    }
+    function formatDayStamp(ts, locale) {
+      const date = new Date(Number(ts) || 0);
+      if (!ts) return '';
+      const key = localDateKey(date);
+      const pad = (value) => (value < 10 ? '0' + value : String(value));
+      const clock = pad(date.getHours()) + ':' + pad(date.getMinutes());
+      const rel = relativeDayLabel(key, copyFor(locale));
+      if (rel) return rel + ' ' + clock;
+      return isZh(locale)
+        ? (date.getMonth() + 1) + '月' + date.getDate() + '日 ' + clock
+        : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + clock;
+    }
+
     function formatDueChip(due, locale, copy) {
       const info = parseDue(due);
       if (!info) return '';
@@ -284,6 +318,57 @@ window.__ModuleLoader__.load({
         ? `${info.month || info.m}月${info.d}日`
         : new Date(`${info.key}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
       return info.time ? `${rel} ${info.time}` : `${rel} · ${copy.allDay}`;
+    }
+
+    /* Completed notes stay on the wall for the rest of the day, then drop into the
+       archive on the next calendar day. Nothing is ever deleted automatically. */
+    function completedDay(item) {
+      return item.completedAt ? localDateKey(new Date(item.completedAt)) : '';
+    }
+    function isArchived(item) {
+      if (item.status !== 'completed') return false;
+      const day = completedDay(item);
+      return Boolean(day) && day < localTodayKey(0);
+    }
+    function wallTodos(items) {
+      return items.filter((item) => !isArchived(item));
+    }
+    function archiveTodos(items) {
+      return items.filter(isArchived).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+    }
+
+    /* A two-note chime, synthesised locally so there is no audio asset to ship. */
+    let audioCtx = null;
+    function playChime(kind) {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        if (!audioCtx) audioCtx = new Ctx();
+        const ctx = audioCtx;
+        if (ctx.state === 'suspended') ctx.resume();
+        const notes = kind === 'undo' ? [523.25, 392] : [659.25, 987.77];
+        const start = ctx.currentTime + 0.01;
+        notes.forEach((freq, index) => {
+          const at = start + index * 0.085;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, at);
+          gain.gain.setValueAtTime(0.0001, at);
+          gain.gain.exponentialRampToValueAtTime(0.16, at + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.26);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(at);
+          osc.stop(at + 0.3);
+        });
+      } catch {}
+    }
+    const SOUND_KEY = 'dsh.smart-notes.sound';
+    function loadSound() {
+      try { return window.localStorage.getItem(SOUND_KEY) !== 'off'; } catch { return true; }
+    }
+    function saveSound(on) {
+      try { window.localStorage.setItem(SOUND_KEY, on ? 'on' : 'off'); } catch {}
     }
 
     function groupTodos(items) {
@@ -437,7 +522,8 @@ window.__ModuleLoader__.load({
       text = text.replace(/[，,]\s*(?:然后|还有|另外|接着|再有|以及)\s*$/g, '');
       text = text.replace(/[，,]?\s*(?:没有|没定|待定|不确定|随便|不用)[吧呢啊了的]*\s*$/g, '');
       text = text.replace(/(?:找|抽|挑|选|另找)?(?:个|出个)?(?:空闲|空|合适|方便)?的?(?:时间|时候)|改天|某天|有空(?:的时候|时|再)?|到时候/g, ' ');
-      text = text.replace(/(?:之前|以前|前|以后|之后|为止)\s*(?=[\u4e00-\u9fa5])/g, ' ');
+      text = text.replace(/(^|[，,])\s*(?:回来|回去)(?:以后|之后|了以后)?\s*/g, '$1，');
+      text = text.replace(/(?:之前|以前|(?<![提之])前|以后|之后|为止)\s*(?=[\u4e00-\u9fa5])/g, ' ');
       text = text.replace(/第\s*[一二三四五六七八九十\d]{1,2}\s*节\s*课?/g, ' ');
       text = text.replace(/第\s*[一二三四五六七八九十\d]{1,2}\s*堂\s*课?/g, ' ');
       // "吧/呢/嘛" are sentence-final particles; mid-utterance they are pure noise.
@@ -451,12 +537,32 @@ window.__ModuleLoader__.load({
       text = text.replace(/这个(?=\s*(?:月|周|星期|礼拜))/g, '这');
       text = text.replace(/那个(?=\s*(?:月|周|星期|礼拜))/g, '那');
       text = text.replace(HESITATION_RE, '，');
+      text = text.replace(/(^|，)\s*(?:我|俺)?\s*(?:看看|看一下|瞧一瞧|想想|数数)\s*[啊呀吧呢]?\s*(?=[，,])/g, '$1');
+      text = text.replace(/^(?:我|俺)\s*(?:看看|想想)\s*[啊呀吧呢]?\s*/, '');
+      // reported speech: "张老师让我…" / "我妈打电话说明天…" / "教务处的通知是…"
+      text = text.replace(/(^|，)(?:我|俺)?[^，]{0,10}?(?:打电话|发消息|发微信|在群里|通知|告诉|说|讲|强调|要求|吩咐)(?:了|说|是)?(?:我|你|他|她|我们)?\s*(?=[\u4e00-\u9fa5])/g, '$1');
+      text = text.replace(/(^|，)\s*(?:让|叫|请)(?:我|你|他|她)?(?:帮他|帮你|替他|替她|帮她)?\s*/g, '$1');
+      text = text.replace(/(^|，)\s*(?:提前|早点|早些|准时)[^，,]{0,8}(?:分钟|小时)(?:到|来|去)?\s*/g, '$1');
+      text = text.replace(/(^|，)\s*(?:先|再)\s*/g, '$1');
+      text = text.replace(/(^|，)\s*(?:然后|接着|随后|之后|最后)\s*/g, '$1，');
+      text = text.replace(/(对|好|是|行|嗯|啊)\1{1,}/g, '$1');
+      text = text.replace(/那个什么|那个啥|那啥|什么来的/g, '');
+      text = text.replace(/(?:放学后|下课以后|下课之后|下班后|晚自习后|自习后|放学以后)/g, ' ');
+      text = text.replace(/(?:下班|放学|上班)\s*(?:之)?前/g, ' ');
+      text = text.replace(/(?:最晚|最迟|截止(?:到|于)?)\s*/g, ' ');
+      text = text.replace(/(?:改到|改成|改期到|顺延到|挪到|换成|调到|调成)\s*/g, '，');
+      text = text.replace(/([点分日号天][^，,]{0,6})了(?=[，,]|$)/g, '$1');
+      text = text.replace(/(?:最晚|最迟|截止到?|deadline)\s*/gi, ' ');
+      text = text.replace(/((?:东西|事情|事项|任务|活儿)|[一二三四五六七八九十两\d]\s*[样件个])[：:][^，,]+/g, '$1');
+      text = text.replace(/(今天|明天|后天|大后天|今早|今晚上|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|周末|这周末)[\s，,]*\s*(?:让|叫|请)(?:我|你|他|她)?\s*/g, '$1，');
+      text = text.replace(/(^|，)\s*一起\s*(?=[，,])/g, '$1');
+      text = text.replace(/(^|，)\s*(?:啥|什么)(?=[，,]|$)/g, '$1');
       text = text.replace(/[，,、]\s*(?:[，,、]\s*)+/g, '，');
       text = text.replace(/^[，、\s]+|[，、\s]+$/g, '');
       return text.trim();
     }
 
-    const TIME_NOISE = /(今天|明天|后天|大后天|昨天|前天|今早|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|全天|每天|每日|每周|每月|工作日|[0-9]{1,2}\s*[:：]\s*[0-9]{2}|[零〇一二两三四五六七八九十0-9]{1,3}\s*[点點时時](?:半|一刻|三刻|[零〇一二两三四五六七八九十0-9]{1,3}\s*分?)?|到|至|-|~|～|\s|，|—|的|了|吧|呢)/g;
+    const TIME_NOISE = /(今天|明天|后天|大后天|昨天|前天|今早|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|全天|每天|每日|每周|每月|工作日|本周|这周|本星期|这星期|本礼拜|这礼拜|下周|下星期|下礼拜|周末|这周末|下周末|[0-9]{1,2}\s*[:：]\s*[0-9]{2}|[零〇一二两三四五六七八九十0-9]{1,3}\s*[点點时時](?:半|一刻|三刻|[零〇一二两三四五六七八九十0-9]{1,3}\s*分?)?|到|至|-|~|～|\s|，|—|的|了|吧|呢)/g;
 
     /* Verbs describing what the user DOES. "在改试卷" is a place phrase only
        grammatically — it is an action, never a location. Single-character verbs are
@@ -481,6 +587,7 @@ window.__ModuleLoader__.load({
         .replace(/^(?:那个|这个|那|这|还有|然后|就)\s*(?=[\u4e00-\u9fa5])/, '')
         .replace(/^[的在了到去回至]+/, '')
         .replace(/^(?:一趟|一下|一次|一趟儿)\s*/, '')
+        .replace(/^(?:我|你|他|她|它|我们|你们|他们)(?:的)?(?=[\u4e00-\u9fa5])/, '')
         .replace(/[的了吧呢啊呀嘛哦]+$/, '')
         .replace(/^[，、\s]+|[，、\s]+$/g, '')
         .trim();
@@ -505,6 +612,8 @@ window.__ModuleLoader__.load({
       if (!text || text.length > 20) return 0;
       if (PLACE_STOP.test(text)) return 0;
       if (/地点|位置|地址|地方|什么时候|时间|日期/.test(text)) return 0;
+      if (/(?:说|讲|通知|告诉|让|叫|喊|问|答|要求|强调|吩咐)$/.test(text)) return 0;
+      if (/(?:自然醒|睡到|发呆|休息)/.test(text)) return 0;
       if (!/[\u4e00-\u9fa5A-Za-z0-9]/.test(text)) return 0;
       if (known && known.indexOf(text) >= 0) return 2;
       const blocked = ACTION_BLOCK.some((word) => text.indexOf(word) >= 0);
@@ -539,7 +648,7 @@ window.__ModuleLoader__.load({
       const value = String(text || '').trim();
       if (value.length < 2) return false;
       if (!/[\u4e00-\u9fa5A-Za-z0-9]/.test(value)) return false;
-      if (/^(在|到|去|回|和|跟|与|同|从|给|地点|地址|位置|时间|日期|然后|还有|另外)/.test(value)) return false;
+      if (/^(在|和|跟|与|同|从|给|地点|地址|位置|时间|日期|然后|还有|另外)/.test(value)) return false;
       if (!value.replace(TIME_NOISE, '').trim()) return false;
       if (PLACE_STOP.test(value)) return false;
       return true;
@@ -551,7 +660,12 @@ window.__ModuleLoader__.load({
       if (META_RE.test(chunk)) return true;
       if (/^(地点|地址|位置|时间|日期)/.test(chunk)) return true;
       if (/^在/.test(chunk) && placeScore(chunk.slice(1)) >= 1) return true;
-      if (/^(到|去|回)/.test(chunk) && cutPlace(chunk.slice(1), null, false)) return true;
+      if (!containsAction(chunk) && !/^(?:到|去|回|从)/.test(chunk) && !/(?:到|去|回|从)\s*[\u4e00-\u9fa5]{1,10}$/.test(chunk) && placeScore(chunk, null) >= 2) return true;
+      if (/^一起/.test(chunk)) return true;
+      if (/^(?:一起)?(?:坐|乘|搭|打车|骑车|开车|走|步行)[^，,]{0,8}(?:去|到)/.test(chunk)) return true;
+      if (/^一起去/.test(chunk)) return true;
+      if (/(?:什么|啥)$/.test(chunk)) return true;
+      if (/^一起(?:去|到|回|逛|走)/.test(chunk)) return true;
       if (!chunk.replace(TIME_NOISE, '').trim()) return true;
       if (!looksLikeTask(chunk)) return true;
       return false;
@@ -561,7 +675,7 @@ window.__ModuleLoader__.load({
 
     const DATE_HINT_RE = /(今天|明天|后天|大后天|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|凌晨|[零〇一二两三四五六七八九十\d]{1,3}\s*[点點时時]|\d{1,2}\s*[:：]\s*\d{2})/;
     const CANCEL_TAIL_RE = /(?:取消|算了|不去了|不做了|不用了|放弃了?|拉倒|不弄了)[吧了呢啊哦嘛了的]*$/;
-    const SOFT_SPLIT_RE = /\s*(?:顺便(?:还)?|顺带|另外|接着|再有|以及|然后再|然后)\s*/g;
+    const SOFT_SPLIT_RE = /\s*(?:顺便(?:还)?|顺带|另外|接着|再有|以及|然后再|然后|回来以后|回来之后|回去以后)\s*/g;
 
     // "周五 交周报 和 下周一 交总结": a connector between two dated clauses is a
     // task boundary. Without a date on both sides it is ordinary speech ("开会和备课").
@@ -572,7 +686,7 @@ window.__ModuleLoader__.load({
       let hit;
       while ((hit = re.exec(text))) {
         const before = text.slice(0, hit.index);
-        const after = text.slice(hit.index + hit[0].length);
+        const after = text.slice(hit.index + hit[0].length).split(/[，,；;、]/)[0];
         const beforeIsTimeOnly = !before.replace(TIME_NOISE, '').trim();
         const afterIsTimeOnly = /^(?:大?后天|明天|今天|明年|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|晚上|早上|中午)/.test(after.trim());
         if (beforeIsTimeOnly && afterIsTimeOnly) continue;
@@ -619,7 +733,12 @@ window.__ModuleLoader__.load({
       // "明天的会 取消吧" is a cancellation, not a new note.
       if (CANCEL_TAIL_RE.test(text)) return [];
       text = splitAtConnectors(text).replace(SOFT_SPLIT_RE, '，');
-      const chunks = text.split(/[，,；;、\n]+/).map((value) => value.trim()).filter(Boolean).flatMap(splitByTimeGroups);
+      const chunks = text
+        .split(/[，,；;、\n]+/)
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .filter((value) => !/^(?:交|做|弄|办|搞|要|那个)?(?:什么|啥)$/.test(value))
+        .flatMap(splitByTimeGroups);
       const tasks = [];
       let current = '';
       chunks.forEach((chunk) => {
@@ -634,9 +753,13 @@ window.__ModuleLoader__.load({
       });
       if (current) tasks.push(current);
       return tasks
-        .map((value) => value.replace(/[，,]{2,}/g, '，').replace(/^[，,\s]+|[，,\s]+$/g, '').trim())
+        .map((value) => value.replace(/[，,]{2,}/g, '，').replace(/[，,]\s*(?:了|吧|呢|啊|呀|嘛)(?=$|[，,])/g, '').replace(/^[，,\s]+|[，,\s]+$/g, '').trim())
         .filter(Boolean);
     }
+
+    // sentences that carry a date but no task ("他说他明天来不了") — the date still
+    // applies to whatever follows, so they are dropped in planSmart, not here.
+    const NON_TASK_RE = /(?:来不了|去不了|做不了|来不及|来不|去不|做不|自然醒|睡到自然|都下雨|取消吧|不去了|提前[一二三四五六七八九十两\d]+分钟|推后[一二三四五六七八九十两\d]+分钟)/;
 
     const RANGE_CN_RE = /(?:从\s*)?([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時]\s*(半|一刻|三刻)?\s*(?:到|至|—|~|～|-)\s*([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時]\s*(半|一刻|三刻|[零〇一二两三四五六七八九十\d]{1,3}\s*分?)?/;
     const RANGE_NUM_RE = /(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:到|至|—|~|～|-)\s*(\d{1,2})\s*[:：]\s*(\d{2})/;
@@ -661,7 +784,8 @@ window.__ModuleLoader__.load({
     ];
 
     // Parses one phrase into { title, location, due, end, repeat, hasDate, hasTime }
-    function parseSmart(raw, nowInput, knownPlaces) {
+    function parseSmart(raw, nowInput, knownPlaces, context) {
+      const ctx = context || {};
       const now = nowInput ? new Date(nowInput) : new Date();
       now.setSeconds(0, 0);
       let text = ` ${String(raw || '').replace(/\s+/g, ' ').replace(/[，,]{2,}/g, '，').trim()} `;
@@ -694,7 +818,7 @@ window.__ModuleLoader__.load({
         if (!Number.isNaN(amount)) { day = addDays(now, amount); eat(later.index, later[0].length); }
       }
 
-      const rel = [[/大后天/, 3], [/后天/, 2], [/明天|明日|明儿|tomorrow/i, 1], [/今天|今日|today/i, 0], [/前天/, -2], [/昨天|yesterday/i, -1]];
+      const rel = [[/明后天/, 1], [/大后天/, 3], [/后天/, 2], [/明天|明日|明儿|tomorrow/i, 1], [/今天|今日|today/i, 0], [/前天/, -2], [/昨天|yesterday/i, -1]];
       let relHit = null;
       let relOffset = 0;
       for (const [re, offset] of rel) {
@@ -725,7 +849,7 @@ window.__ModuleLoader__.load({
         let hit = find(/下下(?:周|星期|礼拜)\s*([一二三四五六日天])/);
         let plus = 14;
         if (!hit) { hit = find(/下(?:个)?(?:周|星期|礼拜)\s*([一二三四五六日天])/); plus = 7; }
-        if (!hit) { hit = find(/(?:这|本)?(?:周|星期|礼拜)\s*([一二三四五六日天])/); plus = 0; }
+        if (!hit) { hit = find(/(?:这|本)?(?:个)?(?:周|星期|礼拜)\s*([一二三四五六日天])/); plus = 0; }
         if (hit) {
           const targetMon = (CN_WEEKDAYS[hit[1]] + 6) % 7;
           const todayMon = (now.getDay() + 6) % 7;
@@ -751,10 +875,12 @@ window.__ModuleLoader__.load({
       }
 
       if (!day) {
-        const hit = find(/(下下周|下(?:个)?(?:周|星期|礼拜)(?!\s*[一二三四五六日天末])|这周(?!\s*末)|本周(?!\s*末)|这个星期|这星期)/);
+        const hit = find(/(下下周|下(?:个)?(?:周|星期|礼拜)(?!\s*[一二三四五六日天末])|(?:这|本)(?:个)?(?:周|星期|礼拜)(?!\s*[一二三四五六日天末]))/);
         if (hit) {
           const todayMon = (now.getDay() + 6) % 7;
           const weeks = /^下下/.test(hit[0]) ? 2 : (/^下/.test(hit[0]) ? 1 : 0);
+          if (/^(?:这|本)(?:个)?(?:周|星期|礼拜)$/.test(hit[0])) { day = startOfDay(now); eat(hit.index, hit[0].length); }
+          if (day) { out.hasDate = true; }
           day = weeks ? addDays(now, (7 - todayMon) % 7 + (weeks - 1) * 7 || 7 * weeks) : startOfDay(now);
           if (weeks === 1) day = addDays(now, ((7 - todayMon) % 7) || 7);
           eat(hit.index, hit[0].length);
@@ -877,7 +1003,10 @@ window.__ModuleLoader__.load({
         if (hh <= 23) { start = hh * 60; eat(m.index, m[0].length); }
       }
 
-      const pmHint = /下午|午后|傍晚|晚上|夜里|今晚|明晚|evening|tonight|afternoon/i.test(text);
+      const ownPm = /下午|午后|傍晚|晚上|夜里|今晚|明晚|evening|tonight|afternoon/i.test(text);
+      const pmHint = ownPm;
+      const ctxPm = Boolean(ctx.pm) && !/上午|早上|早晨|清晨|\bmorning\b/i.test(text)
+        && !/(?:今天|明天|后天|大后天|明早|今早|明晚|今晚|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天])/.test(text);
       if (start === null) {
         let pod = null;
         if (/上午|早上|早晨|清晨|\bmorning\b/i.test(text)) pod = 9;
@@ -886,7 +1015,7 @@ window.__ModuleLoader__.load({
         else if (/傍晚|黄昏|\bevening\b/i.test(text)) pod = 18;
         else if (/晚上|夜里|今晚|明晚|\btonight\b|\bnight\b/i.test(text)) pod = 20;
         if (pod !== null) start = pod * 60;
-      } else if (pmHint && start < 12 * 60) {
+      } else if ((pmHint || ctxPm) && start < 12 * 60) {
         start += 12 * 60;
         if (finish !== null && finish < 12 * 60) finish += 12 * 60;
       }
@@ -940,7 +1069,7 @@ window.__ModuleLoader__.load({
         }
       }
 
-      if (!out.location && (m = find(/(?:去|到|回)\s*([^\s，]{1,24})/))) {
+      if (!out.location && (m = find(/(?:去|到|回)\s*([^\s，]{1,24})/)) && !/^家(?:吃饭|吃|睡|休息|了|去|回)/.test(m[1])) {
         const place = takePlace(m[1], true);
         if (place) {
           out.location = tidyPlace(place);
@@ -974,23 +1103,37 @@ window.__ModuleLoader__.load({
         title = title.replace(/^(?:要|得|需要|准备|打算|应该|必须|记得)\s*(?=[\u4e00-\u9fa5]{2})/, '');
       }
       title = title.replace(/[，,\s]*(?:吧|呢|啊|呀|哦|嘛)$/g, '');
+      title = title.replace(/^(?:先|再|又|也)\s*(?=[\u4e00-\u9fa5]{2})/, '');
+      title = title.replace(/^(?:本|这|下|上)(?:个)?(?:周|星期|礼拜)[\u4e00-\u9fa5]?\s*/, '');
+      title = title.replace(/^(?:周末|这周末|下周末)\s*/, '');
+      title = title.replace(/(?:一下|一遍|一回)$/, '');
+      if (/^(?:来|去|走)?(?:一趟|一下|一次|一趟儿)$/.test(title.replace(/[，,\s]/g, ''))) title = '';
+      title = title.replace(/^听[一二三四五六七八九十几两]?\s*节\s*课$/, '听课');
+      title = title.replace(/^代[一二三四五六七八九十几两]?\s*节\s*课$/, '代课');
+      title = title.replace(/^开(?:一)?个会$/, '开会');
       // "把材料交到办公室" → "交材料到办公室". A particle right after the verb ("把作业交了")
       // means the object already had its verb, so leave that sentence alone.
-      title = title.replace(/^把([\u4e00-\u9fa5]{1,10}?)(交|送|放|拿|给|带|寄|发|传|抄|写|做)(?![了吧呢啊呀嘛的])/, '$2$1');
+      title = title.replace(/^把([\u4e00-\u9fa5]{1,10}?)(交|送|放|拿|给|带|寄|发|传|抄|写|做|整理|处理|收拾|打印|复印|批改|修改|检查|准备|洗|修|装)(?![了吧呢啊呀嘛的])/, '$2$1');
       title = title.replace(/^把([\u4e00-\u9fa5]{1,10}?)(交|送|放|拿|给|带|寄|发|传|抄|写|做)了$/, '$2$1');
+      title = title.replace(/^把([\u4e00-\u9fa5]{1,10}?)(交|送|放|拿|给|带|寄|发|传|抄|写|做|整理|处理|收拾|打印|复印|批改|修改|检查|准备|洗|修|装)(完|好|掉|干净)(?:了)?$/, '$2$3$1');
       title = title.replace(/(?:地点|地址|位置)(?:在|是)?$/g, '');
       title = title.replace(/[在到从去的和跟与]+$/g, '');
       title = title.replace(/\s*(?=[，,])|[，,]\s*/g, '，');
       title = title.replace(/\s+(?=[\u4e00-\u9fa5])|(?<=[\u4e00-\u9fa5])\s+/g, '');
       title = title.replace(/[，,\s]+$/g, '').trim();
+      title = title.replace(/[，,]{2,}/g, '，').replace(/(?:^|[，,])\s*(?:了|吧|呢|啊|呀|嘛|前|后)(?=$|[，,])/g, '').replace(/^[，,]+|[，,]+$/g, '');
+      if (/^[了的前后]$/.test(title)) title = '';
       out.title = title;
 
       if (!title.replace(/[，,\s]/g, '') && out.location && /[去到回]/.test(cleanSpeech(raw))) {
-        const fallback = cleanSpeech(raw)
+        let fallback = cleanSpeech(raw)
           .replace(/(?:下下周|下(?:个)?(?:周|星期|礼拜)|这周|本周|这个月|这月)/g, ' ')
           .replace(new RegExp(TIME_NOISE.source, 'g'), ' ')
           .replace(/\s+/g, ' ')
           .trim();
+        const verb = /[去到回]/.exec(cleanSpeech(raw));
+        if (fallback && verb && fallback.indexOf(verb[0]) < 0) fallback = verb[0] + fallback;
+        fallback = fallback.replace(/(?:一趟|一下|一次)/g, '').trim();
         if (fallback) { title = fallback; out.title = fallback; out.location = ''; }
       }
 
@@ -1041,12 +1184,30 @@ window.__ModuleLoader__.load({
     function planSmart(raw, nowInput, knownPlaces) {
       const parts = splitTasks(raw);
       if (!parts.length) return [];
-      const parsed = parts.map((part) => parseSmart(part, nowInput, knownPlaces));
+      let ctx = {};
+      const parsed = parts.map((part) => {
+        const item = parseSmart(part, nowInput, knownPlaces, ctx);
+        const ownPm = /下午|午后|傍晚|晚上|夜里|今晚|明晚|evening|tonight|afternoon/i.test(part);
+        const amHint = /上午|早上|早晨|清晨|\bmorning\b/i.test(part);
+        const dated = /(?:今天|明天|后天|大后天|明早|今早|明晚|今晚|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天])/.test(part);
+        ctx = { pm: ownPm || (Boolean(ctx.pm) && !amHint && !dated) };
+        item.nonTask = NON_TASK_RE.test(part) && !/^(?:交|送|拿|写|做)/.test(part);
+        return item;
+      });
       // A leading fragment ("明天下午三点" split by a comma) carries date/time only:
       // fold it into the task that follows instead of inventing an empty note.
       const merged = [];
       let carry = null;
       parsed.forEach((item) => {
+        if (item.nonTask) {
+          if (!carry) carry = { due: '', end: '', location: '', repeat: '' };
+          if (item.due && !carry.due) carry.due = item.due;
+          return;
+        }
+        if (item.title && !item.location && !/[去到回从在和跟与A-Za-z0-9]/.test(item.title) && item.title.length <= 10 && !containsAction(item.title) && placeScore(item.title, null) >= 2) {
+          item.location = tidyPlace(item.title);
+          item.title = '';
+        }
         const titled = item.title && item.title.replace(/[，,\s]/g, '').length > 0;
         if (!titled) {
           if (!carry) carry = { due: '', end: '', location: '', repeat: '' };
@@ -1110,6 +1271,7 @@ window.__ModuleLoader__.load({
     function ChevronLeftIcon() { return svg(['M14.5 6l-6 6 6 6'], 16); }
     function ChevronRightIcon() { return svg(['M9.5 6l6 6-6 6'], 16); }
     function CloseIcon() { return svg(['M6 6l12 12', 'M18 6L6 18'], 16); }
+    function ArchiveIcon() { return svg(['M4 7.5h16', 'M5.5 7.5V19h13V7.5', 'M9.5 11.5h5', 'M4 4.5h16v3H4z'], 15); }
 
     /* ---------------- time range filter ---------------- */
 
@@ -1843,17 +2005,33 @@ window.__ModuleLoader__.load({
       const [timeRange, setTimeRange] = React.useState(() => presetDateRange('all'));
       const [modal, setModal] = React.useState(null);
       const [toast, setToast] = React.useState('');
+      const [archiveOpen, setArchiveOpen] = React.useState(false);
+      const [archiveRange, setArchiveRange] = React.useState('all');
+      const [confirmClear, setConfirmClear] = React.useState(false);
+      const [soundOn, setSoundOn] = React.useState(() => loadSound());
       const toastTimer = React.useRef(0);
       const word = query.trim().toLowerCase();
-      const visible = todos.filter((item) =>
+      /* The wall only carries today's work: anything finished on an earlier day has
+         already moved into the archive. */
+      const wall = wallTodos(todos);
+      const archived = archiveTodos(todos);
+      const archivedVisible = archived.filter((item) => {
+        if (archiveRange === 'all') return true;
+        const span = archiveRange === 'today' ? 0 : archiveRange === 'week' ? 6 : 29;
+        const from = new Date();
+        from.setHours(0, 0, 0, 0);
+        from.setDate(from.getDate() - span);
+        return (item.completedAt || 0) >= from.getTime();
+      });
+      const visible = wall.filter((item) =>
         (filter === 'all' || item.status === filter)
         && matchesDateRange(item, timeRange)
         && (!word || item.title.toLowerCase().includes(word) || item.location.toLowerCase().includes(word)));
       const groups = groupTodos(visible);
-      const pending = todos.filter((item) => item.status === 'pending').length;
-      const done = todos.length - pending;
-      const progress = todos.length ? Math.round((done / todos.length) * 100) : 0;
-      const empty = todos.length === 0;
+      const pending = wall.filter((item) => item.status === 'pending').length;
+      const done = wall.length - pending;
+      const progress = wall.length ? Math.round((done / wall.length) * 100) : 0;
+      const empty = wall.length === 0;
       const noResults = !empty && visible.length === 0;
 
       React.useEffect(() => () => window.clearTimeout(toastTimer.current), []);
@@ -1886,8 +2064,39 @@ window.__ModuleLoader__.load({
 
       function toggleTodo(todo) {
         const next = todo.status === 'pending' ? 'completed' : 'pending';
-        setTodos((items) => items.map((item) => item.id === todo.id ? { ...item, status: next, updatedAt: Date.now() } : item));
+        const at = Date.now();
+        setTodos((items) => items.map((item) => item.id === todo.id ? { ...item, status: next, completedAt: next === 'completed' ? at : 0, updatedAt: at } : item));
+        if (soundOn) playChime(next === 'completed' ? 'done' : 'undo');
         flash(next === 'completed' ? copy.toastDone : copy.toastBack);
+      }
+
+      function restoreTodo(todo) {
+        setTodos((items) => items.map((item) => item.id === todo.id ? { ...item, status: 'pending', completedAt: 0, updatedAt: Date.now() } : item));
+        if (soundOn) playChime('undo');
+        flash(copy.restored);
+      }
+
+      function dropTodo(todo) {
+        setTodos((items) => items.filter((item) => item.id !== todo.id));
+        flash(copy.archiveRemoved);
+      }
+
+      function clearArchive() {
+        if (!confirmClear) {
+          setConfirmClear(true);
+          window.setTimeout(() => setConfirmClear(false), 3200);
+          return;
+        }
+        setTodos((items) => items.filter((item) => !isArchived(item)));
+        setConfirmClear(false);
+        flash(copy.archiveCleared);
+      }
+
+      function toggleSound() {
+        const next = !soundOn;
+        setSoundOn(next);
+        saveSound(next);
+        if (next) playChime('done');
       }
 
       return h('div', { className: 'todo-page' },
@@ -1904,6 +2113,22 @@ window.__ModuleLoader__.load({
               h(SearchIcon),
               h('input', { value: query, onChange: (event) => setQuery(event.target.value), placeholder: copy.search, 'aria-label': copy.search }),
               query ? h('button', { type: 'button', onClick: () => setQuery(''), 'aria-label': copy.close }, h(CloseIcon)) : null),
+            h('button', {
+              type: 'button',
+              className: 'todo-sound-toggle' + (soundOn ? ' is-on' : ''),
+              onClick: toggleSound,
+              'aria-pressed': soundOn,
+              title: copy.soundLabel,
+              'aria-label': copy.soundLabel,
+            }, soundOn ? copy.soundOn : copy.soundOff),
+            h('button', {
+              type: 'button',
+              className: 'todo-archive-btn' + (archiveOpen ? ' is-active' : '') + (archived.length ? '' : ' is-empty'),
+              onClick: () => { setArchiveOpen((value) => !value); setConfirmClear(false); },
+              'aria-expanded': archiveOpen,
+              title: copy.archiveTitle,
+            }, h(ArchiveIcon), h('span', { className: 'todo-archive-label' }, copy.archive),
+              archived.length ? h('span', { className: 'todo-archive-badge' }, archived.length > 99 ? '99+' : String(archived.length)) : null),
             h(TimeRangeFilter, { value: timeRange, copy, onChange: setTimeRange }),
             h('div', { className: 'todo-filters' }, [['all', copy.all], ['pending', copy.pending], ['completed', copy.completed]].map(([value, label]) => h('button', {
               key: value,
@@ -1931,6 +2156,37 @@ window.__ModuleLoader__.load({
                 onEdit: (item) => setModal({ mode: 'edit', todo: item }),
                 onToggle: toggleTodo,
               })))))),
+        archiveOpen ? h('section', { className: 'todo-archive-panel', 'aria-label': copy.archiveTitle },
+          h('header', { className: 'todo-archive-head' },
+            h('div', null,
+              h('h2', null, copy.archiveTitle),
+              h('p', null, copy.archiveSubtitle)),
+            h('button', { type: 'button', className: 'todo-archive-close', onClick: () => setArchiveOpen(false), 'aria-label': copy.close }, h(CloseIcon))),
+          h('div', { className: 'todo-archive-ranges' },
+            [['all', copy.archiveAll], ['today', copy.archiveToday], ['week', copy.archiveWeek], ['month', copy.archiveMonth]].map(([value, label]) => h('button', {
+              key: value,
+              type: 'button',
+              className: archiveRange === value ? 'is-active' : '',
+              onClick: () => setArchiveRange(value),
+            }, label)),
+            archived.length ? h('button', { type: 'button', className: 'todo-archive-clear' + (confirmClear ? ' is-confirm' : ''), onClick: clearArchive }, confirmClear ? copy.archiveClearConfirm : copy.archiveClear) : null),
+          archivedVisible.length ? h('ol', { className: 'todo-archive-list' }, archivedVisible.map((item) => h('li', { key: item.id, className: 'todo-archive-item' },
+            h('div', { className: 'todo-archive-main' },
+              h('span', { className: 'todo-archive-dot', 'aria-hidden': true }),
+              h('div', null,
+                h('strong', null, item.title),
+                h('span', { className: 'todo-archive-meta' }, [
+                  item.location,
+                  item.due ? formatDueChip(item.due, locale, copy) : '',
+                  item.completedAt ? copy.completedAt.replace('{date}', formatDayStamp(item.completedAt, locale)) : '',
+                ].filter(Boolean).join(' · ')))),
+            h('div', { className: 'todo-archive-actions' },
+              h('button', { type: 'button', onClick: () => restoreTodo(item) }, copy.archiveRestore),
+              h('button', { type: 'button', className: 'is-danger', onClick: () => dropTodo(item) }, copy.archiveDelete))))) :
+            h('div', { className: 'todo-archive-empty' },
+              h('strong', null, copy.archiveEmpty),
+              h('p', null, copy.archiveEmptyBody)),
+          h('footer', { className: 'todo-archive-foot' }, copy.archiveCount.replace('{count}', String(archived.length)))) : null,
         h('button', { type: 'button', className: 'todo-fab', onClick: () => setModal({ mode: 'create', todo: null }), 'aria-label': copy.addTitle },
           h('span', { className: 'todo-fab-ring', 'aria-hidden': true }),
           h(PlusIcon)),
@@ -1950,7 +2206,7 @@ window.__ModuleLoader__.load({
     /* ---------------- icons / nav ---------------- */
 
     function PanelIcon(props) {
-      const todos = useTodos();
+      const todos = wallTodos(useTodos());
       const pending = todos.filter((item) => item.status === 'pending').length;
       const size = props && props.size ? props.size : 22;
       const active = Boolean(props && props.active);
@@ -2092,6 +2348,47 @@ window.__ModuleLoader__.load({
       .todo-note-detail em{flex:0 0 auto;padding:2px 5px;border-radius:999px;background:rgba(214,73,85,.12);color:#b83e4a;font-size:9px;font-style:normal;font-weight:800}
 
       /* ---------- fab ---------- */
+      .todo-sound-toggle{height:29px;min-width:34px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;transition:background .16s ease,color .16s ease,border-color .16s ease,transform .12s ease}
+      .todo-sound-toggle:active{transform:scale(.95)}
+      .todo-sound-toggle.is-on{color:var(--dsw-alias-brand-primary,#5068ee);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 40%,transparent)}
+
+      .todo-archive-btn{display:inline-flex;align-items:center;gap:5px;height:29px;padding:0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;transition:background .16s ease,color .16s ease,border-color .16s ease,transform .12s ease}
+      .todo-archive-btn:active{transform:scale(.95)}
+      .todo-archive-btn.is-active{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-brand-primary,#5068ee);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 42%,transparent)}
+      .todo-archive-btn.is-empty{opacity:.72}
+      .todo-archive-label{font-weight:600}
+      .todo-archive-badge{display:grid;place-items:center;min-width:17px;height:17px;padding:0 4px;box-sizing:border-box;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 18%,transparent);color:var(--dsw-alias-brand-primary,#5068ee);font:700 10px/1 system-ui}
+
+      .todo-archive-panel{position:fixed;right:30px;bottom:96px;z-index:12;display:flex;flex-direction:column;width:min(380px,calc(100vw - 48px));max-height:min(66vh,520px);box-sizing:border-box;padding:16px 16px 0;border:1px solid var(--dsw-alias-border-l1);border-radius:18px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 22px 50px color-mix(in srgb,#0d1220 26%,transparent);animation:todo-sheet-in .24s cubic-bezier(.22,1,.36,1) both}
+      .todo-archive-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+      .todo-archive-head h2{margin:0;font-size:15px;font-weight:750}
+      .todo-archive-head p{margin:3px 0 0;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:1.5}
+      .todo-archive-close{display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+      .todo-archive-close:hover{background:var(--dsw-alias-bg-layer-2)}
+      .todo-archive-ranges{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin:11px 0 9px}
+      .todo-archive-ranges button{height:25px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;transition:background .14s ease,color .14s ease}
+      .todo-archive-ranges button.is-active{background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-primary);font-weight:700}
+      .todo-archive-clear{margin-left:auto;color:#c2453f;border-color:color-mix(in srgb,#c2453f 32%,transparent)}
+      .todo-archive-clear.is-confirm{background:color-mix(in srgb,#c2453f 14%,transparent);font-weight:700}
+      .todo-archive-list{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:0;list-style:none;overscroll-behavior:contain}
+      .todo-archive-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 8%,transparent)}
+      .todo-archive-main{display:flex;align-items:flex-start;gap:8px;min-width:0}
+      .todo-archive-main strong{display:block;font-size:12.5px;font-weight:650;line-height:1.4;word-break:break-word}
+      .todo-archive-dot{flex:0 0 auto;width:7px;height:7px;margin-top:6px;border-radius:50%;background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 55%,transparent)}
+      .todo-archive-meta{display:block;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}
+      .todo-archive-actions{display:flex;flex:0 0 auto;align-items:center;gap:6px}
+      .todo-archive-actions button{height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:10.5px;cursor:pointer}
+      .todo-archive-actions button:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+      .todo-archive-actions button.is-danger:hover{color:#c2453f;border-color:color-mix(in srgb,#c2453f 40%,transparent)}
+      .todo-archive-empty{flex:1 1 auto;display:grid;place-content:center;gap:5px;padding:26px 10px;text-align:center}
+      .todo-archive-empty strong{font-size:12.5px;font-weight:700}
+      .todo-archive-empty p{margin:0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.55}
+      .todo-archive-foot{flex:0 0 auto;padding:9px 0;border-top:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 8%,transparent);color:var(--dsw-alias-label-secondary);font-size:10.5px;text-align:center}
+
+      @keyframes todo-done-burst{0%{transform:scale(1)}42%{transform:scale(1.08)}100%{transform:scale(1)}}
+      @keyframes todo-done-ring{0%{opacity:.85;transform:scale(.6)}100%{opacity:0;transform:scale(1.9)}}
+      .todo-note.is-popping::after{content:'';position:absolute;inset:-1px;border-radius:inherit;border:2px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 55%,transparent);animation:todo-done-ring .58s ease-out forwards;pointer-events:none}
+
       .todo-fab{position:fixed;right:30px;bottom:26px;z-index:9;display:grid;place-items:center;width:56px;height:56px;padding:0;border:0;border-radius:50%;background:linear-gradient(150deg,color-mix(in srgb,#fff 16%,var(--dsw-alias-brand-primary,#5068ee)),var(--dsw-alias-brand-primary,#5068ee) 62%);color:#fff;box-shadow:0 14px 30px color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 34%,transparent);cursor:pointer;transition:transform .18s cubic-bezier(.34,1.56,.64,1),box-shadow .18s ease}
       .todo-fab:active{transform:scale(.93)}
       .todo-fab:hover{transform:translateY(-3px) scale(1.04);box-shadow:0 18px 36px color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 40%,transparent)}
