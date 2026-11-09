@@ -188,7 +188,10 @@ async function pushNotification(body) {
   }
 }
 
-export function apply(ctx) {
+// Arrow, not a function declaration: cordis 4 treats any apply with a prototype
+// as a class constructor (`new apply(ctx)`) and discards the returned disposer,
+// so cleanup would never run on unload. An arrow has no prototype.
+export const apply = (ctx) => {
   const webServer = typeof ctx.reflect?.get === 'function' ? ctx.reflect.get('webServer') : ctx.webServer;
 
   if (webServer) {
@@ -272,4 +275,4 @@ export function apply(ctx) {
   }, TICK_MS);
 
   ctx.logger?.info?.('[smart-notes] host ready (reminders every 20s, notify on due)');
-}
+};
