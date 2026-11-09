@@ -49,6 +49,8 @@ window.__ModuleLoader__.load({
         archiveClear: 'Clear archive', archiveClearConfirm: 'Tap again to clear', archiveCleared: 'Archive cleared',
         completedAt: 'Done {date}', restored: 'Back in your notes', archiveRemoved: 'Removed from archive',
         soundLabel: 'Sound', soundOn: 'On', soundOff: 'Off',
+        remindLabel: 'Remind', remindOn: 'Reminders on', remindOff: 'Reminders off',
+        remindSaved: 'Reminder scheduled', remindCleared: 'Reminders off for this note',
       },
       zh: {
         nav: '智能便签', title: '智能便签', subtitle: '说一句话就建好，时间、地点、重复自动填。',
@@ -87,6 +89,8 @@ window.__ModuleLoader__.load({
         archiveClear: '清空档案', archiveClearConfirm: '再点一次清空', archiveCleared: '档案已清空',
         completedAt: '{date} 完成', restored: '已恢复到便签墙', archiveRemoved: '已从档案删除',
         soundLabel: '音效', soundOn: '开', soundOff: '关',
+        remindLabel: '提醒', remindOn: '已开启提醒', remindOff: '已关闭提醒',
+        remindSaved: '已排好提醒', remindCleared: '这条不再提醒',
       },
     };
 
@@ -368,6 +372,80 @@ window.__ModuleLoader__.load({
         });
       } catch {}
     }
+    /* ---------------- reminders ---------------- */
+
+    const REMIND_KEY = 'dsh.smart-notes.remind';
+    const ROUTE = '/api/dsh-smart-notes/reminders';
+
+    function loadRemind() {
+      try { return window.localStorage.getItem(REMIND_KEY) !== 'off'; } catch { return true; }
+    }
+
+    function saveRemind(on) {
+      try { window.localStorage.setItem(REMIND_KEY, on ? 'on' : 'off'); } catch {}
+    }
+
+    /* Only notes the user can actually be reminded about: unfinished and dated. */
+    function canRemind(item) {
+      return Boolean(item) && item.status === 'pending' && Boolean(String(item.due || '').trim());
+    }
+
+    /* Push the wall's schedule to the host half, which owns the timer that keeps
+       running while the page is backgrounded. Fire-and-forget: a failed push must
+       never block the UI, and the next change retries it. */
+    let remindTimer = 0;
+    let remindPayload = '';
+    function syncReminders(items, enabled) {
+      try {
+        const list = enabled
+          ? items.filter(canRemind).map((item) => ({
+            id: item.id, title: item.title, location: item.location,
+            due: item.due, repeat: item.repeat || '', status: item.status,
+          }))
+          : [];
+        const payload = JSON.stringify({ items: list });
+        if (payload === remindPayload) return;
+        remindPayload = payload;
+        window.clearTimeout(remindTimer);
+        // Coalesce bursts (a batch create writes several notes) into one POST.
+        remindTimer = window.setTimeout(() => {
+          try {
+            fetch(ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+              .catch(() => { remindPayload = ''; });
+          } catch {}
+        }, 400);
+      } catch {}
+    }
+
+    /* The reminder tone: three rising double-beeps, deliberately unlike the
+       short completion chime so a reminder cannot be mistaken for "good job". */
+    function playAlarm() {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        if (!audioCtx) audioCtx = new Ctx();
+        const ctx = audioCtx;
+        if (ctx.state === 'suspended') ctx.resume();
+        const start = ctx.currentTime + 0.02;
+        const pairs = [[880, 1174.7], [880, 1174.7], [987.8, 1318.5]];
+        pairs.forEach((pair, index) => {
+          pair.forEach((freq, inner) => {
+            const at = start + index * 0.62 + inner * 0.14;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, at);
+            gain.gain.setValueAtTime(0.0001, at);
+            gain.gain.exponentialRampToValueAtTime(0.19, at + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.12);
+            osc.connect(gain).connect(ctx.destination);
+            osc.start(at);
+            osc.stop(at + 0.14);
+          });
+        });
+      } catch {}
+    }
+
     const SOUND_KEY = 'dsh.smart-notes.sound';
     function loadSound() {
       try { return window.localStorage.getItem(SOUND_KEY) !== 'off'; } catch { return true; }
@@ -545,7 +623,11 @@ window.__ModuleLoader__.load({
       text = text.replace(/(^|，)\s*(?:我|俺)?\s*(?:看看|看一下|瞧一瞧|想想|数数)\s*[啊呀吧呢]?\s*(?=[，,])/g, '$1');
       text = text.replace(/^(?:我|俺)\s*(?:看看|想想)\s*[啊呀吧呢]?\s*/, '');
       // reported speech: "张老师让我…" / "我妈打电话说明天…" / "教务处的通知是…"
-      text = text.replace(/(^|，)(?:我|俺)?[^，]{0,10}?(?:打电话|发消息|发微信|在群里|通知|告诉|说|讲|强调|要求|吩咐)(?:了|说|是)?(?:我|你|他|她|我们)?\s*(?=[\u4e00-\u9fa5])/g, '$1');
+      text = text.replace(/(^|，)(?:我|俺)?[^，]{0,10}?(?:打电话|发消息|发微信|在群里|通知|告诉|强调|要求|吩咐)(?:了|说|是)?(?:我|你|他|她|我们)?\s*(?=[\u4e00-\u9fa5])/g, '$1');
+      // 说/讲 must have a real subject, otherwise "讲课"/"说课"/"讲话" lose their verb
+      text = text.replace(/(^|，)(?:我|俺|他|她|你|老师|领导|主任|校长|班主任|组长|园长|妈妈|妈|爸爸|爸|同事|朋友|家长|学生|[\u4e00-\u9fa5]{1,3}(?:老师|主任|校长|同事|家长))\s*(?:说|讲)(?:了|是)?\s*(?=[\u4e00-\u9fa5]{2})/g, '$1');
+      text = text.replace(/(^|，)\s*(?:说|讲)(?:了|是)\s*(?=[\u4e00-\u9fa5]{2})/g, '$1');
+      text = text.replace(/(^|，)(?:说|讲)\s*(?=今天|明天|后天|大后天|今早|今晚|明早|明晚|下周|这周|下个|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天])/g, '$1');
       text = text.replace(/(^|，)\s*(?:让|叫|请)(?:我|你|他|她)?(?:帮他|帮你|替他|替她|帮她)?\s*/g, '$1');
       text = text.replace(/(^|，)\s*(?:提前|早点|早些|准时)[^，,]{0,8}(?:分钟|小时)(?:到|来|去)?\s*/g, '$1');
       text = text.replace(/(^|，)\s*(?:先|再)\s*/g, '$1');
@@ -708,7 +790,7 @@ window.__ModuleLoader__.load({
 
     // "明天 上午九点 开会 下午三点 见客户": two clock groups in one clause are two events.
     function splitByTimeGroups(chunk) {
-      const token = /(今天|明天|后天|大后天|今早|今晚上|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|\d{1,2}\s*[:：]\s*\d{2}|[零〇一二两三四五六七八九十\d]{1,3}\s*[点點时時](?:钟|鐘)?)/g;
+      const token = /(今天|明天|后天|大后天|今早|今晚上|今晚|明早上|明晚上|明早|明晚|明后天|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|\d{1,2}\s*[:：]\s*\d{2}|[零〇一二两三四五六七八九十\d]{1,3}\s*[点點时時](?:钟|鐘)?)/g;
       const hits = [];
       let hit;
       while ((hit = token.exec(chunk))) hits.push({ start: hit.index, end: hit.index + hit[0].length });
@@ -826,7 +908,8 @@ window.__ModuleLoader__.load({
         if (!Number.isNaN(amount)) { day = addDays(now, amount); eat(later.index, later[0].length); }
       }
 
-      const rel = [[/明后天/, 1], [/大后天/, 3], [/后天/, 2], [/明天|明日|明儿|tomorrow/i, 1], [/今天|今日|today/i, 0], [/前天/, -2], [/昨天|yesterday/i, -1]];
+      const rel = [[/明后天/, 1], [/大后天/, 3], [/后早|后晚|后儿|后天/, 2], [/明晚上|明早|明晚|明日|明儿|明天|tomorrow/i, 1], [/今晚上|今早|今晚|今天|今日|today/i, 0], [/前天/, -2], [/昨天|yesterday/i, -1]];
+      let nightCue = false;
       let relHit = null;
       let relOffset = 0;
       for (const [re, offset] of rel) {
@@ -841,6 +924,7 @@ window.__ModuleLoader__.load({
       for (const [re, offset] of (relHit ? [[relHit[0], relOffset]] : [])) {
         const hit = relHit;
         {
+          if (/晚|夜/.test(hit[0])) nightCue = true;
           day = addDays(now, offset);
           const modifier = /^\s*的/.exec(text.slice(hit.index + hit[0].length));
           const before = text.slice(0, hit.index).trim();
@@ -1011,7 +1095,7 @@ window.__ModuleLoader__.load({
         if (hh <= 23) { start = hh * 60; eat(m.index, m[0].length); }
       }
 
-      const ownPm = /下午|午后|傍晚|晚上|夜里|今晚|明晚|evening|tonight|afternoon/i.test(text);
+      const ownPm = /下午|午后|傍晚|晚上|夜里|今晚|明晚|evening|tonight|afternoon/i.test(text) || nightCue || /明晚|今晚上|明晚上/.test(text);
       const pmHint = ownPm;
       const ctxPm = Boolean(ctx.pm) && !/上午|早上|早晨|清晨|\bmorning\b/i.test(text)
         && !/(?:今天|明天|后天|大后天|明早|今早|明晚|今晚|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天])/.test(text);
@@ -1026,6 +1110,10 @@ window.__ModuleLoader__.load({
       } else if ((pmHint || ctxPm) && start < 12 * 60) {
         start += 12 * 60;
         if (finish !== null && finish < 12 * 60) finish += 12 * 60;
+      } else if (start === 12 * 60 && /晚上|夜里|夜间|凌晨|半夜|深夜|午夜|tonight|midnight/i.test(text)) {
+        // 晚上十二点 / 深夜十二点 means midnight — the next day at 00:00
+        start = 0;
+        day = addDays(day || now, 1);
       }
 // Relative offsets ("30 分钟之后", "半个小时后") are arithmetic on the clock, not a
       // wall time: 07:15 + 30min = 07:45. Earlier rules may already have stripped 之后/以后,
@@ -2064,6 +2152,8 @@ window.__ModuleLoader__.load({
       const [archiveRange, setArchiveRange] = React.useState('all');
       const [confirmClear, setConfirmClear] = React.useState(false);
       const [soundOn, setSoundOn] = React.useState(() => loadSound());
+      const [remindOn, setRemindOn] = React.useState(() => loadRemind());
+      const alarmed = React.useRef({});
       const toastTimer = React.useRef(0);
       const word = query.trim().toLowerCase();
       /* The wall only carries today's work: anything finished on an earlier day has
@@ -2090,6 +2180,58 @@ window.__ModuleLoader__.load({
       const noResults = !empty && visible.length === 0;
 
       React.useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+      /* Hand the schedule to the host half. Silent on failure — the next change
+         tries again, and the wall keeps working with no reminders at all. */
+      React.useEffect(() => {
+        syncReminders(todos, remindOn);
+      }, [todos, remindOn]);
+
+      /* The host fires the notification in the background; this fires the tone
+         the moment it is due, which is only possible while the page is alive. */
+      React.useEffect(() => {
+        if (!remindOn) return undefined;
+        const check = () => {
+          const now = Date.now();
+          wallTodos(todos).forEach((item) => {
+            if (item.status !== 'pending' || !item.due) return;
+            const when = fireAtLocal(item);
+            if (!when) return;
+            const key = item.id + '@' + item.due;
+            const delta = now - when;
+            if (delta < 0 || delta > 60000) return;
+            if (alarmed.current[key]) return;
+            alarmed.current[key] = true;
+            if (soundOn) playAlarm();
+            flash(item.title);
+          });
+        };
+        check();
+        const timer = window.setInterval(check, 20000);
+        return () => window.clearInterval(timer);
+      }, [todos, remindOn, soundOn]);
+
+      function fireAtLocal(item) {
+        const due = String(item.due || '');
+        const day = due.slice(0, 10);
+        const clock = due.length > 10 ? due.slice(11, 16) : '';
+        if (!day) return 0;
+        const parts = day.split('-').map(Number);
+        if (parts.some((value) => !value)) return 0;
+        const hour = clock ? Number(clock.slice(0, 2)) : 8;
+        const minute = clock ? Number(clock.slice(3, 5)) : 0;
+        const when = new Date(parts[0], parts[1] - 1, parts[2], hour, minute, 0, 0).getTime();
+        if (!item.repeat) return when;
+        // A repeating note is due at the same clock time; today's slot is the one
+        // the tone can catch, so align to today and let the host handle the rest.
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0).getTime();
+        if (item.repeat === 'daily') return today;
+        if (item.repeat === 'weekday') return today;
+        const weekly = /^weekly:(\d)$/.exec(item.repeat);
+        if (weekly) return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getDay() === Number(weekly[1]) ? today : when;
+        return when;
+      }
 
       function flash(message) {
         setToast(message);
@@ -2147,6 +2289,13 @@ window.__ModuleLoader__.load({
         flash(copy.archiveCleared);
       }
 
+      function toggleRemind() {
+        const next = !remindOn;
+        setRemindOn(next);
+        saveRemind(next);
+        flash(next ? copy.remindOn : copy.remindOff);
+      }
+
       function toggleSound() {
         const next = !soundOn;
         setSoundOn(next);
@@ -2175,6 +2324,14 @@ window.__ModuleLoader__.load({
               title: copy.soundLabel,
               'aria-label': copy.soundLabel,
             }, soundOn ? copy.soundOn : copy.soundOff),
+            h('button', {
+              type: 'button',
+              className: 'todo-remind-toggle' + (remindOn ? ' is-on' : ''),
+              onClick: toggleRemind,
+              'aria-pressed': remindOn,
+              title: copy.remindLabel,
+              'aria-label': copy.remindLabel,
+            }, copy.remindLabel),
             h('button', {
               type: 'button',
               className: 'todo-archive-btn' + (archiveOpen ? ' is-active' : '') + (archived.length ? '' : ' is-empty'),
@@ -2406,6 +2563,10 @@ window.__ModuleLoader__.load({
       .todo-sound-toggle{height:29px;min-width:34px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;transition:background .16s ease,color .16s ease,border-color .16s ease,transform .12s ease}
       .todo-sound-toggle:active{transform:scale(.95)}
       .todo-sound-toggle.is-on{color:var(--dsw-alias-brand-primary,#5068ee);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 40%,transparent)}
+
+      .todo-remind-toggle{height:29px;padding:0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;transition:background .16s ease,color .16s ease,border-color .16s ease,transform .12s ease}
+      .todo-remind-toggle:active{transform:scale(.95)}
+      .todo-remind-toggle.is-on{color:#2f7d54;border-color:color-mix(in srgb,#2f7d54 42%,transparent);background:color-mix(in srgb,#2f7d54 10%,var(--dsw-alias-bg-layer-1))}
 
       .todo-archive-btn{display:inline-flex;align-items:center;gap:5px;height:29px;padding:0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;transition:background .16s ease,color .16s ease,border-color .16s ease,transform .12s ease}
       .todo-archive-btn:active{transform:scale(.95)}
