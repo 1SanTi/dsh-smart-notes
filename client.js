@@ -411,6 +411,13 @@ window.__ModuleLoader__.load({
         remindTimer = window.setTimeout(() => {
           try {
             fetch(ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
+              .then((response) => {
+                // A non-2xx means the host half did not take the schedule (route
+                // not mounted yet, or an auth gate in front of it). Forget the
+                // cached payload so the next change retries instead of silently
+                // believing the host already has it.
+                if (!response || !response.ok) remindPayload = '';
+              })
               .catch(() => { remindPayload = ''; });
           } catch {}
         }, 400);
