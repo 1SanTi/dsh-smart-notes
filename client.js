@@ -57,7 +57,7 @@ window.__ModuleLoader__.load({
         emptyTitle: '还没有便签', emptyBody: '点右下角 +，一句话就能贴上第一张。',
         noResultsTitle: '没有匹配的便签', noResultsBody: '换个关键词、状态或时间范围试试。',
         addTitle: '新增待办', editTitle: '编辑待办',
-        smartLabel: '一句话就能建', smartPlaceholder: '例如：明天下午三点 和示例联系人开会 在办公室',
+        smartLabel: '一句话就能建', smartPlaceholder: '例如：明天下午三点 和小刘老师开会 在办公室',
         smartHint: '自动识别时间与地点，也能用「、」一次说几件事', smartVoice: '语音',
         recognized: '已识别', undetected: '没识别到时间', noPlace: '没写地点',
         chipTime: '时间', chipPlace: '地点', clearField: '清除',
@@ -2255,18 +2255,19 @@ window.__ModuleLoader__.load({
       .todo-page *{box-sizing:border-box}
 
       /* ---------- header ---------- */
-      .todo-header{position:sticky;top:0;z-index:8;display:flex;align-items:center;gap:18px 24px;flex-wrap:wrap;padding:22px 30px 16px;border-bottom:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsh-dream-skin-page-fill,var(--dsw-alias-bg-base)) 88%,transparent);backdrop-filter:blur(20px) saturate(1.3)}
-      .todo-heading{min-width:0;flex:1 1 210px}
-      .todo-heading h1{margin:0;font-size:29px;line-height:1.06;letter-spacing:-.045em;font-weight:760}
-      .todo-heading p{margin:7px 0 0;color:var(--dsw-alias-label-secondary);font-size:12.5px;letter-spacing:.005em}
-      .todo-header-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+      /* Title and controls share one row — wrap to two rows only when the panel is narrow. */
+      .todo-header{position:sticky;top:0;z-index:8;display:flex;align-items:center;gap:14px 18px;flex-wrap:nowrap;padding:16px 30px 13px;border-bottom:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsh-dream-skin-page-fill,var(--dsw-alias-bg-base)) 88%,transparent);backdrop-filter:blur(20px) saturate(1.3)}
+      .todo-heading{min-width:0;flex:0 1 auto;white-space:nowrap}
+      .todo-heading h1{margin:0;font-size:25px;line-height:1.06;letter-spacing:-.045em;font-weight:760}
+      .todo-heading p{margin:5px 0 0;color:var(--dsw-alias-label-secondary);font-size:12.5px;letter-spacing:.005em}
+      .todo-header-actions{display:flex;align-items:center;gap:8px;flex:1 1 auto;flex-wrap:nowrap;justify-content:flex-end;min-width:0}
       .todo-progress{position:absolute;left:0;right:0;bottom:-1px;height:2px;overflow:hidden;background:transparent}
       .todo-progress span{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#37b575,#4bc48c);transition:width .55s cubic-bezier(.22,1,.36,1)}
 
       .todo-pending-chip{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:7px 12px;border-radius:999px;background:color-mix(in srgb,#f29d36 13%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-secondary);font-size:11.5px;font-weight:650}
       .todo-pending-dot{width:6px;height:6px;border-radius:50%;background:#f29d36;animation:todo-dot-breathe 2.6s ease-in-out infinite}
 
-      .todo-search{display:flex;align-items:center;gap:7px;width:206px;height:35px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);transition:border-color .18s ease,background .18s ease}
+      .todo-search{display:flex;align-items:center;gap:7px;flex:0 1 190px;width:auto;min-width:96px;height:35px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);transition:border-color .18s ease,background .18s ease}
       .todo-search:focus-within{border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 55%,var(--dsw-alias-border-l1));background:var(--dsw-alias-bg-layer-2)}
       .todo-search input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}
       .todo-search button{display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
@@ -2548,10 +2549,10 @@ window.__ModuleLoader__.load({
         .todo-wall{width:min(100% - 44px,860px)}
       }
       @media(max-width:860px){
-        .todo-header{align-items:flex-start;flex-direction:column;gap:12px;padding:20px 22px 14px}
-        .todo-header-actions{width:100%}
+        .todo-header{align-items:center;flex-direction:row;flex-wrap:wrap;gap:10px 14px;padding:16px 22px 12px}
+        .todo-header-actions{flex:1 1 100%;justify-content:flex-start;flex-wrap:wrap}
         .todo-search{flex:1 1 190px;width:auto}
-        .todo-heading h1{font-size:27px}
+        .todo-heading h1{font-size:23px}
       }
       @media(max-width:640px){
         .todo-header{padding:18px 16px 12px;gap:9px}
