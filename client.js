@@ -320,18 +320,23 @@ window.__ModuleLoader__.load({
       return info.time ? `${rel} ${info.time}` : `${rel} · ${copy.allDay}`;
     }
 
-    /* Completed notes stay on the wall for the rest of the day, then drop into the
-       archive on the next calendar day. Nothing is ever deleted automatically. */
+    /* Finishing a note does two things at once: it lands in the archive immediately
+       (so nothing you completed is ever missing from it), and it stays on the wall for
+       the rest of the day — you said you do not want it to vanish on the spot. On the
+       next calendar day the wall drops it; the archive keeps it forever. */
     function completedDay(item) {
       return item.completedAt ? localDateKey(new Date(item.completedAt)) : '';
     }
     function isArchived(item) {
+      return item.status === 'completed';
+    }
+    function finishedToday(item) {
       if (item.status !== 'completed') return false;
       const day = completedDay(item);
-      return Boolean(day) && day < localTodayKey(0);
+      return Boolean(day) && day >= localTodayKey(0);
     }
     function wallTodos(items) {
-      return items.filter((item) => !isArchived(item));
+      return items.filter((item) => item.status !== 'completed' || finishedToday(item));
     }
     function archiveTodos(items) {
       return items.filter(isArchived).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
@@ -562,7 +567,7 @@ window.__ModuleLoader__.load({
       return text.trim();
     }
 
-    const TIME_NOISE = /(今天|明天|后天|大后天|昨天|前天|今早|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|全天|每天|每日|每周|每月|工作日|本周|这周|本星期|这星期|本礼拜|这礼拜|下周|下星期|下礼拜|周末|这周末|下周末|[0-9]{1,2}\s*[:：]\s*[0-9]{2}|[零〇一二两三四五六七八九十0-9]{1,3}\s*[点點时時](?:半|一刻|三刻|[零〇一二两三四五六七八九十0-9]{1,3}\s*分?)?|到|至|-|~|～|\s|，|—|的|了|吧|呢)/g;
+    const TIME_NOISE = /(今天|明天|后天|大后天|昨天|前天|今早|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|全天|每天|每日|每周|每月|工作日|本周|这周|本星期|这星期|本礼拜|这礼拜|下周|下星期|下礼拜|周末|这周末|下周末|[0-9]{1,2}\s*[:：]\s*[0-9]{2}|[零〇一二两三四五六七八九十0-9]{1,3}\s*[点點时時](?:钟|鐘)?(?:半|一刻|三刻|[零〇一二两三四五六七八九十0-9]{1,3}\s*分?)?|到|至|-|~|～|\s|，|—|的|了|吧|呢)/g;
 
     /* Verbs describing what the user DOES. "在改试卷" is a place phrase only
        grammatically — it is an action, never a location. Single-character verbs are
@@ -614,6 +619,9 @@ window.__ModuleLoader__.load({
       if (/地点|位置|地址|地方|什么时候|时间|日期/.test(text)) return 0;
       if (/(?:说|讲|通知|告诉|让|叫|喊|问|答|要求|强调|吩咐)$/.test(text)) return 0;
       if (/(?:自然醒|睡到|发呆|休息)/.test(text)) return 0;
+      // Everyday objects are things you act ON, never a place — "给校长回电话" is not
+      // "电话" the venue. Keep this list to objects that collide with place-shaped words.
+      if (/(?:电话|手机|电脑|作业|试卷|卷子|材料|快递|钥匙|书包|课本|学费|饭|水|药|钱)$/.test(text)) return 0;
       if (!/[\u4e00-\u9fa5A-Za-z0-9]/.test(text)) return 0;
       if (known && known.indexOf(text) >= 0) return 2;
       const blocked = ACTION_BLOCK.some((word) => text.indexOf(word) >= 0);
@@ -673,7 +681,7 @@ window.__ModuleLoader__.load({
 
     const NOTHING_RE = /^(?:算了|没事|没什么|不用了|取消|没有|空着|那什么|什么|嗯嗯)+$/;
 
-    const DATE_HINT_RE = /(今天|明天|后天|大后天|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|凌晨|[零〇一二两三四五六七八九十\d]{1,3}\s*[点點时時]|\d{1,2}\s*[:：]\s*\d{2})/;
+    const DATE_HINT_RE = /(今天|明天|后天|大后天|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|凌晨|[零〇一二两三四五六七八九十\d]{1,3}\s*[点點时時](?:钟|鐘)?|\d{1,2}\s*[:：]\s*\d{2})/;
     const CANCEL_TAIL_RE = /(?:取消|算了|不去了|不做了|不用了|放弃了?|拉倒|不弄了)[吧了呢啊哦嘛了的]*$/;
     const SOFT_SPLIT_RE = /\s*(?:顺便(?:还)?|顺带|另外|接着|再有|以及|然后再|然后|回来以后|回来之后|回去以后)\s*/g;
 
@@ -700,7 +708,7 @@ window.__ModuleLoader__.load({
 
     // "明天 上午九点 开会 下午三点 见客户": two clock groups in one clause are two events.
     function splitByTimeGroups(chunk) {
-      const token = /(今天|明天|后天|大后天|今早|今晚上|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|\d{1,2}\s*[:：]\s*\d{2}|[零〇一二两三四五六七八九十\d]{1,3}\s*[点點时時])/g;
+      const token = /(今天|明天|后天|大后天|今早|今晚上|今晚|明早|明晚|周[一二三四五六日天]|星期[一二三四五六日天]|上午|下午|中午|晚上|早上|早晨|傍晚|夜里|凌晨|\d{1,2}\s*[:：]\s*\d{2}|[零〇一二两三四五六七八九十\d]{1,3}\s*[点點时時](?:钟|鐘)?)/g;
       const hits = [];
       let hit;
       while ((hit = token.exec(chunk))) hits.push({ start: hit.index, end: hit.index + hit[0].length });
@@ -761,7 +769,7 @@ window.__ModuleLoader__.load({
     // applies to whatever follows, so they are dropped in planSmart, not here.
     const NON_TASK_RE = /(?:来不了|去不了|做不了|来不及|来不|去不|做不|自然醒|睡到自然|都下雨|取消吧|不去了|提前[一二三四五六七八九十两\d]+分钟|推后[一二三四五六七八九十两\d]+分钟)/;
 
-    const RANGE_CN_RE = /(?:从\s*)?([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時]\s*(半|一刻|三刻)?\s*(?:到|至|—|~|～|-)\s*([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時]\s*(半|一刻|三刻|[零〇一二两三四五六七八九十\d]{1,3}\s*分?)?/;
+    const RANGE_CN_RE = /(?:从\s*)?([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時](?:钟|鐘)?\s*(半|一刻|三刻)?\s*(?:到|至|—|~|～|-)\s*([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時](?:钟|鐘)?\s*(半|一刻|三刻|[零〇一二两三四五六七八九十\d]{1,3}\s*分?)?/;
     const RANGE_NUM_RE = /(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:到|至|—|~|～|-)\s*(\d{1,2})\s*[:：]\s*(\d{2})/;
 
     function minuteFromWord(word) {
@@ -980,7 +988,7 @@ window.__ModuleLoader__.load({
         if (hh <= 23 && mm <= 59) { start = hh * 60 + mm; eat(m.index, m[0].length); }
       }
 
-      if (start === null && (m = find(/([零〇一二两三四五六七八九十\d]{1,3})\s*[点點时時]\s*(半|一刻|三刻|[零〇一二两三四五六七八九十\d]{1,3}\s*分?)?/))) {
+      if (start === null && (m = find(/([零〇一二两三四五六七八九十\d]{1,3})\s*[点點时時](?:钟|鐘)?\s*(半|一刻|三刻|[零〇一二两三四五六七八九十\d]{1,3}\s*分?)?/))) {
         const hh = cnNumber(m[1]);
         if (!Number.isNaN(hh) && hh <= 24) {
           start = (hh % 24) * 60 + minuteFromWord(m[2]);
@@ -1019,6 +1027,53 @@ window.__ModuleLoader__.load({
         start += 12 * 60;
         if (finish !== null && finish < 12 * 60) finish += 12 * 60;
       }
+// Relative offsets ("30 分钟之后", "半个小时后") are arithmetic on the clock, not a
+      // wall time: 07:15 + 30min = 07:45. Earlier rules may already have stripped 之后/以后,
+      // so the trailing cue is optional. Crossing midnight rolls the note to the next day.
+      {
+        const NUM = '(\\d{1,3}|[零〇一二两三四五六七八九十]{1,3})';
+        const UNIT_H = '(?:小时|钟头|小時|鐘頭)';
+        const UNIT_M = '(?:分钟|分)';
+        const CUE = '(?:\\s*(?:之后|之後|以后|以後|后))?';
+        const hit = (src) => find(new RegExp(src));
+        let offset = null;
+        let offsetHit = null;
+        offsetHit = hit(NUM + '\\s*个?\\s*半\\s*' + UNIT_H + '\\s*' + CUE);
+        if (offsetHit) {
+          const base = cnNumber(offsetHit[1]);
+          if (!Number.isNaN(base)) offset = base * 60 + 30;
+        }
+        if (offset === null) {
+          offsetHit = hit('(?:再|过|等)?\\s*半\\s*个?\\s*' + UNIT_H + '\\s*' + CUE);
+          if (offsetHit) offset = 30;
+        }
+        if (offset === null) {
+          offsetHit = hit('(?:再|过|等)?\\s*' + NUM + '\\s*个?\\s*' + UNIT_H + '\\s*' + CUE);
+          if (offsetHit) {
+            const hours = cnNumber(offsetHit[1]);
+            if (!Number.isNaN(hours)) offset = hours * 60;
+          }
+        }
+        if (offset === null) {
+          offsetHit = hit('(?:再|过|等)?\\s*(一刻|三刻)\\s*钟?\\s*' + CUE);
+          if (offsetHit) offset = offsetHit[1] === '一刻' ? 15 : 45;
+        }
+        if (offset === null) {
+          offsetHit = hit('(?:再|过|等)?\\s*' + NUM + '\\s*个?\\s*' + UNIT_M + '\\s*' + CUE);
+          if (offsetHit) {
+            const amount = cnNumber(offsetHit[1]);
+            if (!Number.isNaN(amount)) offset = amount;
+          }
+        }
+        if (offset !== null && offsetHit) {
+          const target = new Date(now.getTime() + offset * 60000);
+          day = startOfDay(target);
+          start = target.getHours() * 60 + target.getMinutes();
+          finish = null;
+          eat(offsetHit.index, offsetHit[0].length);
+        }
+      }
+
       // "十一点到一点" means 11:00–13:00: the end inherits the start's half of the day.
       if (start !== null && finish !== null && finish <= start && finish + 12 * 60 <= 24 * 60) finish += 12 * 60;
 
@@ -1027,7 +1082,7 @@ window.__ModuleLoader__.load({
         day = addDays(now, 7);
       }
 
-      text = text.replace(/今晚上|明晚上|大后天|今天早上|明天早上|今天上午|明天上午|今天下午|明天下午|今天晚上|明天晚上|今早|明早|今晚|明晚|上午|早上|早晨|清晨|中午|正午|下午|午后|傍晚|黄昏|晚上|夜里|凌晨|点钟|左右|前后|的时候/g, ' ')
+      text = text.replace(/今晚上|明晚上|大后天|今天早上|明天早上|今天上午|明天上午|今天下午|明天下午|今天晚上|明天晚上|今早|明早|今晚|明晚|上午|早上|早晨|清晨|中午|正午|下午|午后|傍晚|黄昏|晚上|夜里|凌晨|左右|前后|的时候/g, ' ')
         .replace(/\b(morning|afternoon|evening|noon|tonight|night)\b/gi, ' ');
 
       // --- location, strongest cue first ---
@@ -1200,25 +1255,25 @@ window.__ModuleLoader__.load({
       let carry = null;
       parsed.forEach((item) => {
         if (item.nonTask) {
-          if (!carry) carry = { due: '', end: '', location: '', repeat: '' };
-          if (item.due && !carry.due) carry.due = item.due;
+          if (!carry) carry = { due: '', end: '', location: '', repeat: '', hasDate: false, hasTime: false };
+          if (item.due && !carry.due) { carry.due = item.due; carry.hasDate = item.hasDate; carry.hasTime = item.hasTime; }
           return;
         }
-        if (item.title && !item.location && !/[去到回从在和跟与A-Za-z0-9]/.test(item.title) && item.title.length <= 10 && !containsAction(item.title) && placeScore(item.title, null) >= 2) {
+        if (item.title && !item.location && !/[去到回从在和跟与A-Za-z0-9]/.test(item.title) && !/^(?:上|下|进|出|来|走|跑|开|做|去|回)/.test(item.title) && item.title.length <= 10 && !containsAction(item.title) && placeScore(item.title, null) >= 2) {
           item.location = tidyPlace(item.title);
           item.title = '';
         }
         const titled = item.title && item.title.replace(/[，,\s]/g, '').length > 0;
         if (!titled) {
-          if (!carry) carry = { due: '', end: '', location: '', repeat: '' };
-          if (item.due && !carry.due) carry.due = item.due;
+          if (!carry) carry = { due: '', end: '', location: '', repeat: '', hasDate: false, hasTime: false };
+          if (item.due && !carry.due) { carry.due = item.due; carry.hasDate = item.hasDate; carry.hasTime = item.hasTime; }
           if (item.end && !carry.end) carry.end = item.end;
           if (item.location && !carry.location) carry.location = item.location;
           if (item.repeat && !carry.repeat) carry.repeat = item.repeat;
           return;
         }
         if (carry) {
-          if (!item.due && carry.due) item.due = carry.due;
+          if (!item.due && carry.due) { item.due = carry.due; item.hasDate = carry.hasDate; item.hasTime = carry.hasTime; }
           if (!item.end && carry.end) item.end = carry.end;
           if (!item.location && carry.location) item.location = carry.location;
           if (!item.repeat && carry.repeat) item.repeat = carry.repeat;
@@ -1228,7 +1283,7 @@ window.__ModuleLoader__.load({
       });
       if (carry && merged.length) {
         const last = merged[merged.length - 1];
-        if (carry.due && !last.due) last.due = carry.due;
+        if (carry.due && !last.due) { last.due = carry.due; last.hasDate = carry.hasDate; last.hasTime = carry.hasTime; }
         if (carry.due && last.due && last.due.length <= 10 && carry.due.length > 10 && carry.due.slice(0, 10) === last.due) {
           last.due = carry.due; last.hasTime = true;
         }
@@ -2103,8 +2158,7 @@ window.__ModuleLoader__.load({
         h('style', null, CSS),
         h('header', { className: 'todo-header' },
           h('div', { className: 'todo-heading' },
-            h('h1', null, copy.title),
-            h('p', null, copy.subtitle)),
+            h('h1', null, copy.title)),
           h('div', { className: 'todo-header-actions' },
             h('span', { className: 'todo-pending-chip' },
               h('span', { className: 'todo-pending-dot', 'aria-hidden': true }),
