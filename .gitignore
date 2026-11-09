@@ -1,3 +1,16 @@
 _readme.mjs
 *.bak*
 node_modules/
+
+# weekly security audit
+.miaoda_key
+*.key
+*.pem
+.env*
+skill-recorder/sessions/
+frames.jsonl
+storyboard.md
+__pycache__/
+*.pyc
+*.log
+.DS_Store
