@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
         noTimeLabel: 'No time set', optional: 'Optional', create: 'Pin note',
         startTime: 'Start', endTime: 'End', noEnd: 'No end time', endBeforeStart: 'End must be after start',
         repeat: 'Repeat', repeatNone: 'Once', repeatDaily: 'Daily', repeatWeekday: 'Weekdays', repeatWeekly: 'Weekly', repeatMonthly: 'Monthly',
-        repeatChip: '{label} repeat', rangeJoiner: '–', save: 'Save', cancel: 'Cancel', remove: 'Delete', confirmRemove: 'Tap again', markCompleted: 'Mark done', markPending: 'Mark pending',
+        repeatChip: '{label} repeat', rangeJoiner: '–', endDay: 'End date', sameDay: 'Same day', endDayHint: 'Tap a day to set the end', save: 'Save', cancel: 'Cancel', remove: 'Delete', confirmRemove: 'Tap again', markCompleted: 'Mark done', markPending: 'Mark pending',
         close: 'Close', overdue: 'Overdue', needTitle: 'Write something first',
         quick: 'Quick', todayQ: 'Today', tomorrowQ: 'Tomorrow', dayAfterQ: 'In 2 days', weekendQ: 'Weekend', nextMondayQ: 'Next Mon',
         hour: 'Hour', minute: 'Minute', morning: '9:00', noon: '12:00', afternoon: '15:00', evening: '20:00',
@@ -70,7 +70,7 @@ window.__ModuleLoader__.load({
         noTimeLabel: '未设时间', optional: '可选', create: '贴上便签',
         startTime: '开始', endTime: '结束', noEnd: '不设结束时间', endBeforeStart: '结束时间要晚于开始时间',
         repeat: '重复', repeatNone: '不重复', repeatDaily: '每天', repeatWeekday: '工作日', repeatWeekly: '每周', repeatMonthly: '每月',
-        repeatChip: '每{label}', rangeJoiner: '–', save: '保存修改', cancel: '取消', remove: '删除', confirmRemove: '再点一次删除', markCompleted: '标记完成', markPending: '恢复待完成',
+        repeatChip: '每{label}', rangeJoiner: '–', endDay: '结束日期', sameDay: '同一天', endDayHint: '点日历选结束日', save: '保存修改', cancel: '取消', remove: '删除', confirmRemove: '再点一次删除', markCompleted: '标记完成', markPending: '恢复待完成',
         close: '关闭', overdue: '已逾期', needTitle: '先写一句要做什么',
         quick: '快捷', todayQ: '今天', tomorrowQ: '明天', dayAfterQ: '后天', weekendQ: '周末', nextMondayQ: '下周一',
         hour: '时', minute: '分', morning: '9:00', noon: '12:00', afternoon: '15:00', evening: '20:00',
@@ -148,6 +148,15 @@ window.__ModuleLoader__.load({
     const TIME_ONLY = /^([01]\d|2[0-3]):[0-5]\d$/;
     const REPEATS = ['daily', 'weekday', 'weekly', 'monthly'];
 
+    function normalizeEndDate(value) {
+      if (typeof value !== 'string' || !value) return '';
+      const text = value.trim();
+      if (!DATE_ONLY.test(text)) return '';
+      const date = new Date(`${text}T00:00:00`);
+      if (Number.isNaN(date.getTime())) return '';
+      return localDateKey(date) === text ? text : '';
+    }
+
     function normalizeEnd(value) {
       if (typeof value !== 'string') return '';
       const text = value.trim();
@@ -175,6 +184,7 @@ window.__ModuleLoader__.load({
         location: typeof item.location === 'string' ? item.location.trim() : '',
         due: normalizeDue(item.due),
         end: normalizeEnd(item.end),
+        endDate: normalizeEndDate(item.endDate),
         repeat: normalizeRepeat(item.repeat),
         status: item.status === 'completed' ? 'completed' : 'pending',
         completedAt: Number(item.completedAt) || (item.status === 'completed' ? (Number(item.updatedAt) || now) : 0),
@@ -204,6 +214,7 @@ window.__ModuleLoader__.load({
             location: '',
             due: '',
             end: '',
+            endDate: '',
             repeat: '',
             status: 'pending',
             color: normalizeColor(item.color, id),
@@ -322,6 +333,30 @@ window.__ModuleLoader__.load({
         ? `${info.month || info.m}月${info.d}日`
         : new Date(`${info.key}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
       return info.time ? `${rel} ${info.time}` : `${rel} · ${copy.allDay}`;
+    }
+
+    /* A note can now span a range: a date span ("11月25日 – 11月27日"),
+       an hour span inside a day ("明天 15:00 – 17:00"), or both
+       ("今晚 22:00 – 明天 02:00"). One formatter so the card, the chip and
+       the picker preview always say the same thing. */
+    function shortDayLabel(key, locale, copy) {
+      if (!key) return '';
+      const rel = relativeDayLabel(key, copy);
+      if (rel) return rel;
+      const info = parseDue(key);
+      if (!info) return '';
+      return isZh(locale) ? `${info.m}月${info.d}日` : new Date(`${key}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    function formatRangeChip(due, end, endDate, locale, copy) {
+      const base = formatDueChip(due, locale, copy);
+      if (!base) return '';
+      const joiner = copy.rangeJoiner || '–';
+      const startKey = due ? due.slice(0, 10) : '';
+      const spanDay = endDate && endDate !== startKey ? endDate : '';
+      if (!end && !spanDay) return base;
+      const tail = spanDay ? `${shortDayLabel(spanDay, locale, copy)}${end ? ` ${end}` : ''}` : end;
+      return `${base} ${joiner} ${tail}`;
     }
 
     /* Finishing a note does two things at once: it lands in the archive immediately
@@ -608,10 +643,14 @@ window.__ModuleLoader__.load({
       text = text.replace(LEAD_NOISE_RE, '$1');
       text = text.replace(/(^|，)\s*(?:哦|噢|哎|诶)?\s*(?:对了|对哦|说起来|差点忘了|差点忘记|忘记说了|补充一下|再补充|还有就是|对了对了)\s*/g, '$1');
       text = text.replace(/(?:我|俺)?\s*(?:想|要|就是|主要)?\s*说(?:的)?是\s*/g, ' ');
-      text = text.replace(/^(?:我|俺)\s*(?:想|要|就是|主要)?\s*(?=[\u4e00-\u9fa5])/, '');
+      text = text.replace(/(^|，)\s*(?:我们|咱们|俺们)\s*(?:想|要|就是|主要|准备|打算)?\s*(?=[\u4e00-\u9fa5])/g, '$1');
+      text = text.replace(/^(?:我们|咱们|俺们)\s*(?:想|要|就是|主要|准备|打算)?\s*(?=[\u4e00-\u9fa5])/, '');
+      text = text.replace(/^(?:我|俺)\s*(?:想|要|就是|主要|准备|打算)?\s*(?=[\u4e00-\u9fa5])/, '');
       text = text.replace(/[，,]\s*(?:然后|还有|另外|接着|再有|以及)\s*$/g, '');
       text = text.replace(/[，,]?\s*(?:没有|没定|待定|不确定|随便|不用)[吧呢啊了的]*\s*$/g, '');
       text = text.replace(/(?:找|抽|挑|选|另找)?(?:个|出个)?(?:空闲|空|合适|方便)?的?(?:时间|时候)|改天|某天|有空(?:的时候|时|再)?|到时候/g, ' ');
+      text = text.replace(/[，,]\s*(?:大概|大约|差不多|估计|预计)?\s*(?:[一二两三四五六七八九十\d]+|半)\s*个?\s*(?:小时|钟头|分钟|分)(?:左右|上下|以内|之内)?\s*(?=\s*(?:$|[，,]))/g, '，');
+      text = text.replace(/\s*(?:大概|大约|差不多|估计|预计)?\s*(?:[一二两三四五六七八九十\d]+|半)\s*个?\s*(?:小时|钟头|分钟|分)(?:左右|上下|以内|之内)?\s*$/g, ' ');
       text = text.replace(/(^|[，,])\s*(?:回来|回去)(?:以后|之后|了以后)?\s*/g, '$1，');
       text = text.replace(/(?:之前|以前|(?<![提之])前|以后|之后|为止)\s*(?=[\u4e00-\u9fa5])/g, ' ');
       text = text.replace(/第\s*[一二三四五六七八九十\d]{1,2}\s*节\s*课?/g, ' ');
@@ -641,10 +680,17 @@ window.__ModuleLoader__.load({
       text = text.replace(/(^|，)\s*(?:然后|接着|随后|之后|最后)\s*/g, '$1，');
       text = text.replace(/(对|好|是|行|嗯|啊)\1{1,}/g, '$1');
       text = text.replace(/那个什么|那个啥|那啥|什么来的/g, '');
+      text = text.replace(/(?:晚一点|晚点儿|晚点|待会儿|待会|等会儿|回头|改天|过两天)(?:再|就)?(?:说|再议|再讲|看)?/g, ' ');
       text = text.replace(/(?:放学后|下课以后|下课之后|下班后|晚自习后|自习后|放学以后)/g, ' ');
       text = text.replace(/(?:下班|放学|上班)\s*(?:之)?前/g, ' ');
       text = text.replace(/(?:最晚|最迟|截止(?:到|于)?)\s*/g, ' ');
-      text = text.replace(/(?:改到|改成|改期到|顺延到|挪到|换成|调到|调成)\s*/g, '，');
+      text = text.replace(/(?:再|往)?往后?(?:推|挪|延|拖)\s*/g, ' ');
+      text = text.replace(/(?:改到|改成|改期到|改期|顺延到|顺延|挪到|挪|换成|调到|调成)\s*/g, '，');
+      text = text.replace(/(?:往后|往后边)?(?:推迟|推后|延后|延迟|延期|缓一缓|缓两天|拖后)\s*(?=[，,\d零〇一二两三四五六七八九十半一]|$)/g, ' ');
+      text = text.replace(/(?:再|往)?后推\s*/g, ' ');
+      // "推到明天十点" / "延到下午三点" — the verb only says "move it", the time follows.
+      text = text.replace(/(?:往后|往后边)?(?:推迟|推后|延后|延迟|拖延|顺延|提前)?(?:推|延|挪|改|顺延|推迟|推后|延后|延迟|拖)(?:到|至)\s*(?=今天|明天|后天|大后天|今早|今晚|明早|明晚|下周|这周|下个|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|[零〇一二两三四五六七八九十0-9]{1,3}\s*[点點时時])/g, ' ');
+      text = text.replace(/(?:再|往)?后挪\s*/g, ' ');
       text = text.replace(/([点分日号天][^，,]{0,6})了(?=[，,]|$)/g, '$1');
       text = text.replace(/(?:最晚|最迟|截止到?|deadline)\s*/gi, ' ');
       text = text.replace(/((?:东西|事情|事项|任务|活儿)|[一二三四五六七八九十两\d]\s*[样件个])[：:][^，,]+/g, '$1');
@@ -755,6 +801,9 @@ window.__ModuleLoader__.load({
     function isRefinement(chunk) {
       if (!chunk) return true;
       if (META_RE.test(chunk)) return true;
+      if (/^(?:内容|主题|议题|议程|目的|关于|主要|具体)/.test(chunk)) return true;
+      if (/^(?:讨论|交流|商量|研究|聊|谈)(?:一下|一下儿|下)?(?=[\u4e00-\u9fa5])/.test(chunk)) return true;
+      if (/^(?:大概|大约|差不多|估计)?\s*(?:[一二两三四五六七八九十\d]+|半)\s*个?\s*(?:小时|钟头|分钟|分)(?:左右|上下)?$/.test(chunk)) return true;
       if (/^(地点|地址|位置|时间|日期)/.test(chunk)) return true;
       if (/^在/.test(chunk) && placeScore(chunk.slice(1)) >= 1) return true;
       if (!containsAction(chunk) && !/^(?:到|去|回|从)/.test(chunk) && !/(?:到|去|回|从)\s*[\u4e00-\u9fa5]{1,10}$/.test(chunk) && placeScore(chunk, null) >= 2) return true;
@@ -856,10 +905,77 @@ window.__ModuleLoader__.load({
 
     // sentences that carry a date but no task ("他说他明天来不了") — the date still
     // applies to whatever follows, so they are dropped in planSmart, not here.
-    const NON_TASK_RE = /(?:来不了|去不了|做不了|来不及|来不|去不|做不|自然醒|睡到自然|都下雨|取消吧|不去了|提前[一二三四五六七八九十两\d]+分钟|推后[一二三四五六七八九十两\d]+分钟)/;
+    const NON_TASK_RE = /(?:来不了|去不了|做不了|来不及|来不|去不|做不|自然醒|睡到自然|都下雨|取消吧|不去了|提前[一二三四五六七八九十两\d]+分钟|推后[一二三四五六七八九十两\d]+分钟|晚一点|晚点儿|待会儿|待会|回头|改天|过两天)/;
 
     const RANGE_CN_RE = /(?:从\s*)?([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時](?:钟|鐘)?\s*(半|一刻|三刻)?\s*(?:到|至|—|~|～|-)\s*([零〇一二两三四五六七八九十\d]{1,3})\s*(?:[:：]\s*(\d{2}))?\s*[点點时時](?:钟|鐘)?\s*(半|一刻|三刻|[零〇一二两三四五六七八九十\d]{1,3}\s*分?)?/;
     const RANGE_NUM_RE = /(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:到|至|—|~|～|-)\s*(\d{1,2})\s*[:：]\s*(\d{2})/;
+    const DAY_TOKEN = '(?:今天|今日|明天|明日|明晚|今晚|明早|后天|大后天|明后天|(?:这|本|下|下下)?(?:个)?(?:周|星期|礼拜)[一二三四五六日天]|这周末|下周末|周末|[一二两三四五六七八九十]{1,3}月[一二两三四五六七八九十]{1,3}[日号]|\\d{1,2}月\\d{1,2}[日号]|\\d{1,2}[/\\-]\\d{1,2}|[零〇一二两三四五六七八九十\\d]{1,3}[日号])';
+    const DAY_RANGE_RE = new RegExp('(' + DAY_TOKEN + ')\\s*(?:到|至|—|~|～|-)\\s*(' + DAY_TOKEN + ')');
+    const DAY_WORD = '(?:今天|明天|明日|明早|明晚|今晚|后天|大后天|明后天)?';
+    const PERIOD_WORD = '(?:凌晨|早上|早晨|上午|中午|下午|午后|傍晚|晚上|夜里)?';
+    const RANGE_CN2_RE = new RegExp('(?:从\\s*)?(' + DAY_WORD + PERIOD_WORD + ')\\s*([零〇一二两三四五六七八九十\\d]{1,3})\\s*(?:[:：]\\s*(\\d{2}))?\\s*[点點时時](?:钟|鐘)?\\s*(半|一刻|三刻)?\\s*(?:到|至|—|~|～|-)\\s*(' + DAY_WORD + PERIOD_WORD + ')\\s*([零〇一二两三四五六七八九十\\d]{1,3})\\s*(?:[:：]\\s*(\\d{2}))?\\s*[点點时時](?:钟|鐘)?\\s*(半|一刻|三刻|[零〇一二两三四五六七八九十\\d]{1,3}\\s*分?)?');
+
+    // One day expression -> Date at local midnight. Used by the date-range pass
+    // so "11月25日到11月27日" can produce both ends instead of only the start.
+    function evalDayToken(token, now) {
+      const t = String(token || '').trim();
+      if (!t) return null;
+      if (/今(?:天|日|晚|早)/.test(t)) return startOfDay(now);
+      if (/^明后天$/.test(t)) return addDays(now, 1);
+      if (/明(?:天|日|早|晚)/.test(t)) return addDays(now, 1);
+      if (/^大后天$/.test(t)) return addDays(now, 3);
+      if (/^后天$/.test(t)) return addDays(now, 2);
+      if (/^昨天$/.test(t)) return addDays(now, -1);
+      if (/^前天$/.test(t)) return addDays(now, -2);
+      if (/周末|weekend/i.test(t)) {
+        const todayMon = (now.getDay() + 6) % 7;
+        let delta = 5 - todayMon;
+        if (delta < 0) delta += 7;
+        if (/^下/.test(t)) delta += 7;
+        return addDays(now, delta);
+      }
+      let hit = /^(下下|下|这|本)?(?:个)?(?:周|星期|礼拜)([一二三四五六日天])$/.exec(t);
+      if (hit) {
+        const plus = hit[1] === '下下' ? 2 : (hit[1] === '下' ? 1 : 0);
+        const targetMon = (CN_WEEKDAYS[hit[2]] + 6) % 7;
+        const todayMon = (now.getDay() + 6) % 7;
+        let delta = targetMon - todayMon;
+        if (plus === 0 && delta < 0) delta += 7;
+        if (plus > 0) delta += plus * 7;
+        return addDays(now, delta);
+      }
+      hit = /^([一二两三四五六七八九十]{1,3})月([一二两三四五六七八九十]{1,3})[日号]$/.exec(t);
+      if (hit) {
+        const month = cnNumber(hit[1]); const date = cnNumber(hit[2]);
+        if (month >= 1 && month <= 12 && date >= 1 && date <= 31) {
+          let value = new Date(now.getFullYear(), month - 1, date);
+          if (value < startOfDay(now)) value = new Date(now.getFullYear() + 1, month - 1, date);
+          return value;
+        }
+      }
+      hit = /^(\d{1,2})月(\d{1,2})[日号]$/.exec(t);
+      if (hit) {
+        let value = new Date(now.getFullYear(), Number(hit[1]) - 1, Number(hit[2]));
+        if (value < startOfDay(now)) value = new Date(now.getFullYear() + 1, Number(hit[1]) - 1, Number(hit[2]));
+        return value;
+      }
+      hit = /^(\d{1,2})[/\-](\d{1,2})$/.exec(t);
+      if (hit) {
+        let value = new Date(now.getFullYear(), Number(hit[1]) - 1, Number(hit[2]));
+        if (value < startOfDay(now)) value = new Date(now.getFullYear() + 1, Number(hit[1]) - 1, Number(hit[2]));
+        return value;
+      }
+      hit = /^([零〇一二两三四五六七八九十\d]{1,3})[日号]$/.exec(t);
+      if (hit) {
+        const date = cnNumber(hit[1]);
+        if (date >= 1 && date <= 31) {
+          let value = new Date(now.getFullYear(), now.getMonth(), date);
+          if (date < now.getDate()) value = new Date(now.getFullYear(), now.getMonth() + 1, date);
+          return value;
+        }
+      }
+      return null;
+    }
 
     function minuteFromWord(word) {
       if (!word) return 0;
@@ -886,9 +1002,12 @@ window.__ModuleLoader__.load({
       const now = nowInput ? new Date(nowInput) : new Date();
       now.setSeconds(0, 0);
       let text = ` ${String(raw || '').replace(/\s+/g, ' ').replace(/[，,]{2,}/g, '，').trim()} `;
-      const out = { title: '', location: '', due: '', end: '', repeat: '', hasDate: false, hasTime: false };
+      const out = { title: '', location: '', due: '', end: '', endDate: '', repeat: '', hasDate: false, hasTime: false };
       const known = Array.isArray(knownPlaces) ? knownPlaces.filter(Boolean) : [];
+      if (/^(?:晚一点|晚点儿|待会儿|待会|等会儿|回头|改天|过两天)(?:再|就)?(?:说|再议|再讲|看|讲)?(?:吧|呢|了)?$/.test(String(raw || '').replace(/[，,\s。！!？?]/g, ''))) return out;
       let day = null;
+      let endDay = null;
+      let endAm = false;
       let start = null;
       let finish = null;
       let repeat = '';
@@ -913,6 +1032,17 @@ window.__ModuleLoader__.load({
       if (later) {
         const amount = cnNumber(String(later[1] || later[2]).trim());
         if (!Number.isNaN(amount)) { day = addDays(now, amount); eat(later.index, later[0].length); }
+      }
+
+      const dayRange = DAY_RANGE_RE.exec(text);
+      if (dayRange) {
+        const from = evalDayToken(dayRange[1], now);
+        const to = evalDayToken(dayRange[2], now);
+        if (from && to && to >= from) {
+          day = from;
+          endDay = to;
+          eat(dayRange.index, dayRange[0].length);
+        }
       }
 
       const rel = [[/明后天/, 1], [/大后天/, 3], [/后早|后晚|后儿|后天/, 2], [/明晚上|明早|明晚|明日|明儿|明天|tomorrow/i, 1], [/今晚上|今早|今晚|今天|今日|today/i, 0], [/前天/, -2], [/昨天|yesterday/i, -1]];
@@ -1063,6 +1193,33 @@ window.__ModuleLoader__.load({
         }
       }
 
+      if (start === null && (m = RANGE_CN2_RE.exec(text))) {
+        const periodA = m[1] || '';
+        const periodB = m[5] || '';
+        const hourA = cnNumber(m[2]);
+        const hourB = cnNumber(m[6]);
+        if (!Number.isNaN(hourA) && !Number.isNaN(hourB) && hourA <= 24 && hourB <= 24) {
+          let a = (hourA % 24) * 60 + (m[3] ? Number(m[3]) : minuteFromWord(m[4]));
+          let b = (hourB % 24) * 60 + (m[7] ? Number(m[7]) : minuteFromWord(m[8]));
+          const pmA = /下午|午后|傍晚|晚上|夜里|今晚|明晚/.test(periodA);
+          const pmB = /下午|午后|傍晚|晚上|夜里|今晚|明晚/.test(periodB);
+          const amB = /凌晨|早上|早晨|上午/.test(periodB);
+          if (pmA && !pmB && !amB && a < 12 * 60) a += 12 * 60;
+          if (pmA && pmB && b < a) b += 12 * 60;
+          if (pmB && b < 12 * 60) b += 12 * 60;
+          if (b < a && !amB) b += 12 * 60;
+          endAm = amB && b < a;
+          const dayA = evalDayToken((/今天|今日|明天|明日|明早|明晚|今晚|后天|大后天|明后天/.exec(periodA) || [''])[0], now);
+          const dayB = evalDayToken((/今天|今日|明天|明日|明早|明晚|今晚|后天|大后天|明后天/.exec(periodB) || [''])[0], now);
+          if (dayA) day = dayA;
+          if (!endDay && dayB) endDay = dayB;
+          if (!endDay && day && endAm) endDay = addDays(day, 1);
+          start = a;
+          finish = b;
+          eat(m.index, m[0].length);
+        }
+      }
+
       if (start === null && (m = RANGE_CN_RE.exec(text))) {
         const first = cnNumber(m[1]);
         const second = cnNumber(m[4]);
@@ -1170,7 +1327,8 @@ window.__ModuleLoader__.load({
       }
 
       // "十一点到一点" means 11:00–13:00: the end inherits the start's half of the day.
-      if (start !== null && finish !== null && finish <= start && finish + 12 * 60 <= 24 * 60) finish += 12 * 60;
+      if (start !== null && finish !== null && finish <= start && finish + 12 * 60 <= 24 * 60 && !(endDay && day && endDay > day) && !endAm) finish += 12 * 60;
+      if (endDay && day && endDay > day && finish !== null && finish > 12 * 60 && finish - 12 * 60 >= 0 && finish < start) finish -= 12 * 60;
 
       // "这周日下午" said at 19:30 on Sunday can only mean the coming Sunday.
       if (weekdayToday && start !== null && start <= now.getHours() * 60 + now.getMinutes()) {
@@ -1266,13 +1424,19 @@ window.__ModuleLoader__.load({
       title = title.replace(/^把([\u4e00-\u9fa5]{1,10}?)(交|送|放|拿|给|带|寄|发|传|抄|写|做|整理|处理|收拾|打印|复印|批改|修改|检查|准备|洗|修|装)(?![了吧呢啊呀嘛的])/, '$2$1');
       title = title.replace(/^把([\u4e00-\u9fa5]{1,10}?)(交|送|放|拿|给|带|寄|发|传|抄|写|做)了$/, '$2$1');
       title = title.replace(/^把([\u4e00-\u9fa5]{1,10}?)(交|送|放|拿|给|带|寄|发|传|抄|写|做|整理|处理|收拾|打印|复印|批改|修改|检查|准备|洗|修|装)(完|好|掉|干净)(?:了)?$/, '$2$3$1');
+      title = title.replace(/^(?:再|过|等)\s*(?=[零〇一二两三四五六七八九十\d]|半|一刻|三刻|个?半|分钟|小时|钟头)/, '');
+      title = title.replace(/^(?:再|往后|往后边|后面|这个|那个)?\s*(?:推迟|推后|延后|延迟|延期|拖延|顺延|提前)(?:到|至)?\s*/, '');
+      title = title.replace(/^(?:再|往后|往后边|后面|这个|那个)?\s*(?:推|延|挪|改|拖)\s*(?:到|至)\s*(?=今天|明天|后天|大后天|今早|今晚|明早|明晚|下周|这周|下个|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|[零〇一二两三四五六七八九十0-9]{1,3}\s*[点點时時])/, '');
       title = title.replace(/(?:地点|地址|位置)(?:在|是)?$/g, '');
       title = title.replace(/[在到从去的和跟与]+$/g, '');
       title = title.replace(/\s*(?=[，,])|[，,]\s*/g, '，');
       title = title.replace(/\s+(?=[\u4e00-\u9fa5])|(?<=[\u4e00-\u9fa5])\s+/g, '');
       title = title.replace(/[，,\s]+$/g, '').trim();
       title = title.replace(/[，,]{2,}/g, '，').replace(/(?:^|[，,])\s*(?:了|吧|呢|啊|呀|嘛|前|后)(?=$|[，,])/g, '').replace(/^[，,]+|[，,]+$/g, '');
+      title = title.replace(/[，,]\s*(?:内容|主题|议题|议程|目的)(?:是|为)?\s*[^，,]*$/g, '');
       if (/^[了的前后]$/.test(title)) title = '';
+      if (/^(?:再|过|等|就|又|先|再等|重新)+$/.test(title.replace(/[，,\s]/g, ''))) title = '';
+      if (/^(?:再|往后|往后边|后面)?\s*(?:推迟|推后|延后|延迟|延期|拖延|顺延|提前|推|延|挪|改|拖)(?:到|至)?(?:吧|呢|啊|呀|嘛|了)?$/.test(title.replace(/[，,\s]/g, ''))) title = '';
       out.title = title;
 
       if (!title.replace(/[，,\s]/g, '') && out.location && /[去到回]/.test(cleanSpeech(raw))) {
@@ -1280,8 +1444,10 @@ window.__ModuleLoader__.load({
           .replace(/(?:下下周|下(?:个)?(?:周|星期|礼拜)|这周|本周|这个月|这月)/g, ' ')
           .replace(new RegExp(TIME_NOISE.source, 'g'), ' ')
           .replace(/\s+/g, ' ')
+          .replace(/(?:^|\s)[到至—~～](?=\s|$)/g, ' ')
+          .replace(/\s+/g, ' ')
           .trim();
-        const verb = /[去到回]/.exec(cleanSpeech(raw));
+        const verb = /[去到回](?![今明后大昨前\d日号天周月])/.exec(cleanSpeech(raw));
         if (fallback && verb && fallback.indexOf(verb[0]) < 0) fallback = verb[0] + fallback;
         fallback = fallback.replace(/(?:一趟|一下|一次)/g, '').trim();
         if (fallback) { title = fallback; out.title = fallback; out.location = ''; }
@@ -1323,6 +1489,13 @@ window.__ModuleLoader__.load({
         if (finish > 24 * 60) finish = 24 * 60;
         out.end = `${String(Math.floor(finish / 60)).padStart(2, '0')}:${String(finish % 60).padStart(2, '0')}`;
       }
+      if (endDay && day && endDay > day) {
+        out.endDate = localDateKey(endDay);
+      } else if (endAm && day) {
+        out.endDate = localDateKey(addDays(day, 1));
+      } else if (finish !== null && start !== null && finish <= start && day) {
+        out.endDate = localDateKey(addDays(day, 1));
+      }
 
       return out;
     }
@@ -1350,7 +1523,7 @@ window.__ModuleLoader__.load({
       let carry = null;
       parsed.forEach((item) => {
         if (item.nonTask) {
-          if (!carry) carry = { due: '', end: '', location: '', repeat: '', hasDate: false, hasTime: false };
+          if (!carry) carry = { due: '', end: '', endDate: '', location: '', repeat: '', hasDate: false, hasTime: false };
           if (item.due && !carry.due) { carry.due = item.due; carry.hasDate = item.hasDate; carry.hasTime = item.hasTime; }
           return;
         }
@@ -1360,9 +1533,10 @@ window.__ModuleLoader__.load({
         }
         const titled = item.title && item.title.replace(/[，,\s]/g, '').length > 0;
         if (!titled) {
-          if (!carry) carry = { due: '', end: '', location: '', repeat: '', hasDate: false, hasTime: false };
+          if (!carry) carry = { due: '', end: '', endDate: '', location: '', repeat: '', hasDate: false, hasTime: false };
           if (item.due && !carry.due) { carry.due = item.due; carry.hasDate = item.hasDate; carry.hasTime = item.hasTime; }
           if (item.end && !carry.end) carry.end = item.end;
+          if (item.endDate && !carry.endDate) carry.endDate = item.endDate;
           if (item.location && !carry.location) carry.location = item.location;
           if (item.repeat && !carry.repeat) carry.repeat = item.repeat;
           return;
@@ -1370,6 +1544,7 @@ window.__ModuleLoader__.load({
         if (carry) {
           if (!item.due && carry.due) { item.due = carry.due; item.hasDate = carry.hasDate; item.hasTime = carry.hasTime; }
           if (!item.end && carry.end) item.end = carry.end;
+          if (!item.endDate && carry.endDate) item.endDate = carry.endDate;
           if (!item.location && carry.location) item.location = carry.location;
           if (!item.repeat && carry.repeat) item.repeat = carry.repeat;
           carry = null;
@@ -1383,6 +1558,7 @@ window.__ModuleLoader__.load({
           last.due = carry.due; last.hasTime = true;
         }
         if (carry.end && !last.end) last.end = carry.end;
+        if (carry.endDate && !last.endDate) last.endDate = carry.endDate;
         if (carry.location && !last.location) last.location = carry.location;
         if (carry.repeat && !last.repeat) last.repeat = carry.repeat;
         if (carry.due) last.hasDate = true;
@@ -1399,6 +1575,7 @@ window.__ModuleLoader__.load({
           }
           if (!item.due && base.due) item.due = base.due;
           if (!item.end && base.end) item.end = base.end;
+          if (!item.endDate && base.endDate) item.endDate = base.endDate;
           if (!item.repeat && base.repeat) item.repeat = base.repeat;
         });
       }
@@ -1616,12 +1793,17 @@ window.__ModuleLoader__.load({
           }, item.label))));
     }
 
-    function DateTimePicker({ value, end, repeat, locale, copy, onChange }) {
+    function DateTimePicker({ value, end, endDate, repeat, locale, copy, onChange }) {
       const initial = parseDue(value);
       const [dayKey, setDayKey] = React.useState(() => (initial ? initial.key : ''));
       const [time, setTime] = React.useState(() => (initial ? initial.time : ''));
       const [endTime, setEndTime] = React.useState(() => end || '');
       const [recur, setRecur] = React.useState(() => repeat || '');
+      /* A note can now span several days ("11月25日到11月27日"), so the calendar
+         has two targets: the day it starts and, optionally, the day it ends.
+         "同一天" keeps the old single-day behaviour. */
+      const [endDay, setEndDay] = React.useState(() => endDate || '');
+      const [pickingEnd, setPickingEnd] = React.useState(false);
       const [cursor, setCursor] = React.useState(() => {
         const base = initial ? initial.date : new Date();
         return { y: base.getFullYear(), m: base.getMonth() };
@@ -1647,8 +1829,10 @@ window.__ModuleLoader__.load({
         const t = next.time !== undefined ? next.time : time;
         const e = next.end !== undefined ? next.end : endTime;
         const r = next.repeat !== undefined ? next.repeat : recur;
+        const e2 = next.endDate !== undefined ? next.endDate : endDay;
         const key = day || localTodayKey(0);
-        onChange({ due: t ? `${key}T${t}` : day, end: t ? e : '', repeat: r });
+        const spanEnd = e2 && e2 > key ? e2 : '';
+        onChange({ due: t ? `${key}T${t}` : day, end: t ? e : '', endDate: spanEnd, repeat: r });
       }
 
       function shiftBy(minutes) {
@@ -1676,8 +1860,15 @@ window.__ModuleLoader__.load({
 
       function pickDay(day) {
         const next = localDateKey(new Date(cursor.y, cursor.m, day));
+        if (pickingEnd) {
+          if (dayKey && next < dayKey) { setEndDay(dayKey); setDayKey(next); emit({ day: next, endDate: dayKey }); }
+          else { setEndDay(next); emit({ endDate: next }); }
+          setPickingEnd(false);
+          return;
+        }
         setDayKey(next);
-        emit({ day: next });
+        if (endDay && endDay <= next) setEndDay('');
+        emit({ day: next, endDate: endDay && endDay > next ? endDay : '' });
       }
 
       function pickQuick(offset) {
@@ -1691,7 +1882,7 @@ window.__ModuleLoader__.load({
       function setMode(mode) {
         if (mode === 'allday') {
           setTime(''); setEndTime('');
-          emit({ time: '', end: '', day: dayKey || localTodayKey(0) });
+          emit({ time: '', end: '', day: dayKey || localTodayKey(0), endDate: endDay });
           if (!dayKey) setDayKey(localTodayKey(0));
           return;
         }
@@ -1715,9 +1906,10 @@ window.__ModuleLoader__.load({
 
       const monthTitle = isZh(locale) ? `${cursor.y} 年 ${cursor.m + 1} 月` : `${copy.monthNames[cursor.m]} ${cursor.y}`;
       const mode = !time ? 'allday' : (endTime ? 'range' : 'point');
-      const preview = time
-        ? `${formatDueChip(value || `${dayKey}T${time}`, locale, copy)}${endTime ? ` ${copy.rangeJoiner} ${endTime}` : ''}`
-        : (dayKey ? formatDueChip(dayKey, locale, copy) : copy.noTimeLabel);
+      const previewDay = dayKey || (time ? localTodayKey(0) : '');
+      const preview = previewDay
+        ? formatRangeChip(time ? `${previewDay}T${time}` : previewDay, endTime, endDay, locale, copy)
+        : copy.noTimeLabel;
 
       return h('div', { className: 'todo-picker' },
         h('div', { className: 'todo-quick-row' },
@@ -1750,14 +1942,31 @@ window.__ModuleLoader__.load({
           const key = localDateKey(new Date(cursor.y, cursor.m, day));
           const isToday = key === localTodayKey(0);
           const isSelected = key === dayKey;
+          const isEnd = Boolean(endDay) && key === endDay;
+          const inSpan = Boolean(endDay && dayKey) && key > dayKey && key < endDay;
           const isPast = key < localTodayKey(0);
           return h('button', {
             key,
             type: 'button',
-            className: `todo-cal-day${isSelected ? ' is-selected' : ''}${isToday ? ' is-today' : ''}${isPast ? ' is-past' : ''}`,
+            className: `todo-cal-day${isSelected ? ' is-selected' : ''}${isEnd ? ' is-end' : ''}${inSpan ? ' is-span' : ''}${isToday ? ' is-today' : ''}${isPast ? ' is-past' : ''}`,
             onClick: () => pickDay(day),
           }, String(day));
         })),
+        h('div', { className: 'todo-span-row' },
+          h('span', { className: 'todo-span-label' }, copy.endDay),
+          h('button', {
+            type: 'button',
+            className: `todo-span-chip${!endDay ? ' is-active' : ''}`,
+            onClick: () => { setEndDay(''); setPickingEnd(false); emit({ endDate: '' }); },
+          }, copy.sameDay),
+          h('button', {
+            type: 'button',
+            className: `todo-span-chip${endDay ? ' is-active' : ''}${pickingEnd ? ' is-picking' : ''}`,
+            /* Idempotent on purpose: a single tap on the device can deliver two
+               click events (touch path + synthesised click), and a toggle would
+               flip back to off before the user ever sees it armed. */
+            onClick: () => setPickingEnd(true),
+          }, endDay ? shortDayLabel(endDay, locale, copy) : copy.endDayHint)),
         h('div', { className: 'todo-picker-time' },
           h('div', { className: 'todo-picker-time-head' },
             h('strong', null, copy.time),
@@ -1814,7 +2023,7 @@ window.__ModuleLoader__.load({
               onClick: () => { setRecur(value); emit({ repeat: value }); },
             }, label)))),
         h('div', { className: 'todo-picker-foot' },
-          h('button', { type: 'button', className: 'todo-link-btn', onClick: () => { setTime(''); setEndTime(''); setDayKey(''); setRecur(''); onChange({ due: '', end: '', repeat: '' }); } }, copy.clearTime),
+          h('button', { type: 'button', className: 'todo-link-btn', onClick: () => { setTime(''); setEndTime(''); setDayKey(''); setEndDay(''); setRecur(''); onChange({ due: '', end: '', endDate: '', repeat: '' }); } }, copy.clearTime),
           h('span', { className: 'todo-picker-preview' }, preview)));
     }
 
@@ -1872,7 +2081,7 @@ window.__ModuleLoader__.load({
           todo.location ? h('div', { className: 'todo-note-detail' }, h(LocationIcon), h('span', null, todo.location)) : null,
           info ? h('div', { className: `todo-note-detail todo-note-time${overdue ? ' is-overdue' : ''}` },
             h(ClockIcon),
-            h('span', null, `${formatDueChip(todo.due, locale, copy)}${todo.end ? ` ${copy.rangeJoiner} ${todo.end}` : ''}`),
+            h('span', null, formatRangeChip(todo.due, todo.end, todo.endDate, locale, copy)),
             overdue ? h('em', null, copy.overdue) : null) : null) : null,
         todo.repeat ? h('div', { className: 'todo-note-repeat' }, repeatText(todo.repeat, copy, locale)) : null,
         h('span', { className: 'todo-note-ring', 'aria-hidden': true }));
@@ -1928,6 +2137,7 @@ window.__ModuleLoader__.load({
       const [location, setLocation] = React.useState(isEdit ? todo.location : '');
       const [due, setDue] = React.useState(isEdit ? todo.due : '');
       const [end, setEnd] = React.useState(isEdit ? (todo.end || '') : '');
+      const [endDate, setEndDate] = React.useState(isEdit ? (todo.endDate || '') : '');
       const [repeat, setRepeat] = React.useState(isEdit ? (todo.repeat || '') : '');
       const [color, setColor] = React.useState(isEdit ? todo.color : NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)]);
       const [confirmDelete, setConfirmDelete] = React.useState(false);
@@ -1936,7 +2146,7 @@ window.__ModuleLoader__.load({
       const [plan, setPlan] = React.useState([]);
       const [shake, setShake] = React.useState(false);
       const [showPlan, setShowPlan] = React.useState(false);
-      const touched = React.useRef({ title: Boolean(isEdit), due: Boolean(isEdit), location: Boolean(isEdit) });
+      const touched = React.useRef({ title: Boolean(isEdit), due: false, location: Boolean(isEdit) });
       const inputRef = React.useRef(null);
       const voice = useVoice(copy);
 
@@ -1950,12 +2160,29 @@ window.__ModuleLoader__.load({
       function applyParse(text) {
         const parsed = planSmart(text, undefined, knownPlaces);
         setPlan(parsed);
-        const first = parsed[0];
-        if (!first) { if (!touched.current.title) setTitle(text.trim()); return; }
-        if (!touched.current.title) setTitle(first.title || text.trim());
-        if (!touched.current.due) setDue(first.due);
-        if (!touched.current.due) { setEnd(first.end || ''); setRepeat(first.repeat || ''); }
-        if (!touched.current.location) setLocation(first.location);
+        /* "两个小时之后" / "改到明天十点" carry a time but no task: the plan comes
+           back empty even though the clock was understood. Fall back to the raw
+           parse so a note can be rescheduled without retyping its title. */
+        const loose = parsed.length ? null : parseSmart(text, undefined, knownPlaces);
+        const first = parsed[0] || loose;
+        if (!first) { if (!touched.current.title && !isEdit) setTitle(text.trim()); return; }
+        if (!touched.current.title && !isEdit) setTitle(first.title || text.trim());
+        if (!touched.current.due) {
+          if (first.due) {
+            setDue(first.due);
+            setEnd(first.end || '');
+            setEndDate(first.endDate || '');
+            setRepeat(first.repeat || '');
+          } else if (!isEdit) {
+            setDue('');
+            setEnd('');
+            setEndDate('');
+            setRepeat('');
+          }
+        }
+        if (!touched.current.location) {
+          if (first.location) setLocation(first.location);
+        }
       }
 
       function handleRaw(event) {
@@ -1979,7 +2206,7 @@ window.__ModuleLoader__.load({
         }
         const now = Date.now();
         if (isEdit) {
-          setTodos((items) => items.map((item) => item.id === todo.id ? { ...item, title: cleanTitle, location: location.trim(), due: normalizeDue(due), end: normalizeEnd(end), repeat: normalizeRepeat(repeat), color, updatedAt: now } : item));
+          setTodos((items) => items.map((item) => item.id === todo.id ? { ...item, title: cleanTitle, location: location.trim(), due: normalizeDue(due), end: normalizeEnd(end), endDate: normalizeEndDate(endDate), repeat: normalizeRepeat(repeat), color, updatedAt: now } : item));
           onClose(copy.toastUpdated);
           return;
         }
@@ -1990,6 +2217,7 @@ window.__ModuleLoader__.load({
             location: (item.location || '').trim(),
             due: normalizeDue(item.due || ''),
             end: normalizeEnd(item.end || end),
+            endDate: normalizeEndDate(item.endDate || endDate),
             repeat: normalizeRepeat(item.repeat || repeat),
             status: 'pending',
             color,
@@ -2008,6 +2236,7 @@ window.__ModuleLoader__.load({
           location: location.trim(),
           due: normalizeDue(due),
           end: normalizeEnd(end),
+          endDate: normalizeEndDate(endDate),
           repeat: normalizeRepeat(repeat),
           status: 'pending',
           color,
@@ -2032,7 +2261,7 @@ window.__ModuleLoader__.load({
       }
 
       const detected = Boolean(due || location);
-      const timeLabel = due ? formatDueChip(due, locale, copy) : copy.noTimeLabel || copy.allDay;
+      const timeLabel = due ? formatRangeChip(due, end, endDate, locale, copy) : copy.noTimeLabel || copy.allDay;
       function repeatLabel(value) {
         if (!value) return '';
         if (value === 'daily') return copy.repeatDaily;
@@ -2082,7 +2311,7 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 className: 'todo-chip todo-chip-time',
                 onClick: () => setShowPicker(true),
-              }, h(ClockIcon), h('span', null, timeLabel), h('b', { className: 'todo-chip-x', onClick: (event) => { event.stopPropagation(); touched.current.due = true; setDue(''); } }, '×')) : null,
+              }, h(ClockIcon), h('span', null, timeLabel), h('b', { className: 'todo-chip-x', onClick: (event) => { event.stopPropagation(); touched.current.due = true; setDue(''); setEnd(''); setEndDate(''); } }, '×')) : null,
               location ? h('span', { className: 'todo-chip todo-chip-place' },
                 h(LocationIcon), h('span', null, location),
                 h('b', { className: 'todo-chip-x', onClick: () => { touched.current.location = true; setLocation(''); } }, '×')) : null,
@@ -2098,10 +2327,11 @@ window.__ModuleLoader__.load({
             plan.length > 1 && showPlan ? h('ol', { className: 'todo-plan-list' }, plan.map((item, index) => h('li', { key: `${item.title}-${index}` },
               h('span', { className: 'todo-plan-title' }, item.title || '—'),
               item.location ? h('em', null, item.location) : null,
-              item.due ? h('em', null, formatDueChip(item.due, locale, copy)) : null))) : null,
+              item.due ? h('em', null, formatRangeChip(item.due, item.end, item.endDate, locale, copy)) : null))) : null,
             showPicker ? h(DateTimePicker, {
               value: due,
               end,
+              endDate,
               repeat,
               locale,
               copy,
@@ -2109,14 +2339,15 @@ window.__ModuleLoader__.load({
                 touched.current.due = true;
                 setDue(next.due);
                 setEnd(next.end || '');
+                setEndDate(next.endDate || '');
                 if (next.repeat !== undefined) setRepeat(next.repeat || '');
               },
             }) : null,
             !showPicker ? h('button', { type: 'button', className: 'todo-time-row', onClick: () => setShowPicker(true) },
               h('span', { className: 'todo-time-row-icon' }, h(CalendarIcon)),
               h('span', { className: 'todo-time-row-text' },
-                h('strong', null, due ? formatDueChip(due, locale, copy) : copy.pickTime),
-                h('em', null, due ? (end ? `${copy.rangeJoiner} ${end}` : (due.length > 10 ? copy.chipTime : copy.allDay)) : copy.optional)),
+                h('strong', null, due ? formatRangeChip(due, end, endDate, locale, copy) : copy.pickTime),
+                h('em', null, due ? ((end || endDate) ? copy.rangeJoiner + ' ' + copy.endTime : (due.length > 10 ? copy.chipTime : copy.allDay)) : copy.optional)),
               h(ChevronRightIcon)) : null,
             h('button', { type: 'button', className: 'todo-more-toggle', onClick: () => setShowMore((value) => !value) },
               h('span', null, showMore ? copy.fewerOptions : copy.moreOptions),
@@ -2697,6 +2928,14 @@ window.__ModuleLoader__.load({
       .todo-cal-day.is-past{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));opacity:.55}
       .todo-cal-day.is-today{box-shadow:inset 0 0 0 1.5px color-mix(in srgb,#f29d36 60%,transparent);font-weight:700}
       .todo-cal-day.is-selected{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary,#5068ee));color:#fff;font-weight:700;box-shadow:0 4px 10px color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 34%,transparent)}
+      .todo-cal-day.is-span{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 13%,transparent);border-radius:0}
+      .todo-cal-day.is-end{box-shadow:inset 0 0 0 1.5px var(--dsw-alias-brand-primary,#5068ee);font-weight:700}
+      .todo-span-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0 4px}
+      .todo-span-label{font-size:11px;font-weight:650;color:var(--dsw-alias-label-secondary)}
+      .todo-span-chip{height:26px;padding:0 10px;border:1px dashed var(--dsw-alias-border-l1);border-radius:999px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;font-weight:600;cursor:pointer;transition:background .14s ease,color .14s ease,border-color .14s ease}
+      .todo-span-chip.is-active{border-style:solid;border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 55%,transparent);color:var(--dsw-alias-brand-primary,#5068ee);background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 10%,transparent)}
+      .todo-span-chip.is-picking{border-style:solid;box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary,#5068ee) 24%,transparent)}
+      .todo-span-chip:active{transform:scale(.96)}
       .todo-picker-time{display:flex;flex-direction:column;gap:9px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1)}
       .todo-picker-time-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
       .todo-picker-time-head strong{font-size:11.5px}
